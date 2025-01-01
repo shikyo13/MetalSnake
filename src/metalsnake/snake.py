@@ -102,8 +102,8 @@ class GameConfig:
         PowerUpType.INVINCIBILITY,
         PowerUpType.SCORE_MULTIPLIER,
     )
-    POWERUP_SPAWN_INTERVAL: int = 500  # Frames between power-up spawns
-    POWERUP_DURATION: int = 300  # Frames power-up effect lasts
+    POWERUP_SPAWN_INTERVAL: int = 400  # Frames between power-up spawns
+    POWERUP_DURATION: int = 500  # Frames power-up effect lasts
     POWERUP_COUNT: int = 3  # Maximum number of active power-ups
     
     # Colors (as RGB tuples)
