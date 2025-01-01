@@ -10,6 +10,7 @@ Features include:
 - Improved state management and game flow
 - Comprehensive logging and error handling
 - Enhanced power-up system with distinct visuals and animations
+- Responsive design accommodating window resizing
 - Project structure adaptation for development and PyInstaller bundling
 """
 
@@ -73,7 +74,7 @@ class GameConfig:
     Centralized configuration for game settings.
     Using dataclass for automatic initialization and cleaner syntax.
     """
-    # Grid settings
+    # Grid settings (will be dynamically calculated based on window size)
     GRID_COLS: int = 30
     GRID_ROWS: int = 20
     
@@ -102,7 +103,7 @@ class GameConfig:
     POWERUP_DURATION: int = 300  # Frames power-up effect lasts
     POWERUP_COUNT: int = 3  # Maximum number of active power-ups
     
-    # Colors (as RGBA tuples)
+    # Colors (as RGB tuples)
     WHITE: Tuple[int, ...] = (255, 255, 255)
     BLACK: Tuple[int, ...] = (0, 0, 0)
     RED: Tuple[int, ...] = (200, 0, 0)
@@ -215,8 +216,9 @@ class Particle:
     Individual particle with physics-based movement.
     Represents a single particle in the particle effect system.
     """
-    def __init__(self, x: float, y: float, config: GameConfig):
+    def __init__(self, x: float, y: float, color: Tuple[int, int, int], config: GameConfig):
         self.config = config
+        self.color = color
         self.reset(x, y)
         
     def reset(self, x: float, y: float) -> None:
@@ -239,9 +241,7 @@ class Particle:
     def draw(self, surface: pygame.Surface) -> None:
         """Draw particle with size based on remaining lifetime"""
         radius = max(1, self.life // 6)
-        color = (random.randint(100, 255),
-                 random.randint(200, 255), 0)
-        pygame.draw.circle(surface, color,
+        pygame.draw.circle(surface, self.color,
                            (int(self.x), int(self.y)), radius)
 
 class ParticleSystem:
@@ -254,14 +254,15 @@ class ParticleSystem:
         self.particles: List[Particle] = []
         self.particle_pool: List[Particle] = []
         
-    def emit(self, x: float, y: float, count: int) -> None:
-        """Emit a burst of particles at the specified position"""
+    def emit(self, x: float, y: float, count: int, color: Tuple[int, int, int]) -> None:
+        """Emit a burst of particles at the specified position with given color"""
         for _ in range(count):
             if self.particle_pool:
                 particle = self.particle_pool.pop()
+                particle.color = color  # Update color to match power-up
                 particle.reset(x, y)
             else:
-                particle = Particle(x, y, self.config)
+                particle = Particle(x, y, color, self.config)
             self.particles.append(particle)
             
     def update_and_draw(self, surface: pygame.Surface) -> None:
@@ -429,9 +430,21 @@ class PowerUpManager:
                 game.particles.emit(
                     powerup.x * game.cell_size + game.cell_size // 2,
                     powerup.y * game.cell_size + game.cell_size // 2,
-                    game.config.PARTICLE_COUNT
+                    game.config.PARTICLE_COUNT,
+                    self.get_powerup_particle_color(powerup.type)
                 )
                 logging.info(f"Power-up {powerup.type.name} collected by player.")
+    
+    def get_powerup_particle_color(self, powerup_type: PowerUpType) -> Tuple[int, int, int]:
+        """Return the color for particles emitted from a power-up"""
+        if powerup_type == PowerUpType.SPEED_BOOST:
+            return (255, 255, 0)  # Yellow
+        elif powerup_type == PowerUpType.INVINCIBILITY:
+            return (0, 255, 255)  # Cyan
+        elif powerup_type == PowerUpType.SCORE_MULTIPLIER:
+            return (255, 0, 255)  # Magenta
+        else:
+            return (255, 255, 255)  # White
     
     def draw(self, surface: pygame.Surface, cell_size: int, frame_count: int, particle_system: ParticleSystem) -> None:
         """Draw all active power-ups with enhanced visuals and animations"""
@@ -442,16 +455,16 @@ class PowerUpManager:
             
             # Define colors and shapes based on power-up type
             if powerup.type == PowerUpType.SPEED_BOOST:
-                color = self.config.YELLOW
+                color = (255, 255, 0)  # Yellow
                 shape = "triangle"
             elif powerup.type == PowerUpType.INVINCIBILITY:
-                color = self.config.CYAN
+                color = (0, 255, 255)  # Cyan
                 shape = "shield"  # Changed to 'shield' for clarity
             elif powerup.type == PowerUpType.SCORE_MULTIPLIER:
-                color = self.config.MAGENTA
+                color = (255, 0, 255)  # Magenta
                 shape = "star"
             else:
-                color = self.config.WHITE
+                color = (255, 255, 255)  # White
                 shape = "circle"
 
             # Calculate pulsating scale
@@ -464,13 +477,16 @@ class PowerUpManager:
 
             # Glow effect
             glow_radius = pulsate_radius + 6
-            glow_color = (*color[:3], 100)  # Semi-transparent glow
-            pygame.draw.circle(surface, glow_color, (center_x, int(center_y + bob)), glow_radius)
+            glow_color = (*color, 100)  # Semi-transparent glow
+            glow_surface = pygame.Surface((glow_radius * 2, glow_radius * 2), pygame.SRCALPHA)
+            pygame.draw.circle(glow_surface, glow_color,
+                             (glow_radius, glow_radius), glow_radius)
+            surface.blit(glow_surface, (center_x - glow_radius, center_y - glow_radius + bob), special_flags=pygame.BLEND_RGBA_ADD)
 
             # Draw distinct shape with outline
             if shape == "circle":
                 pygame.draw.circle(surface, color, (center_x, int(center_y + bob)), pulsate_radius)
-                pygame.draw.circle(surface, self.config.WHITE, (center_x, int(center_y + bob)), pulsate_radius, 2)
+                pygame.draw.circle(surface, (255, 255, 255), (center_x, int(center_y + bob)), pulsate_radius, 2)
             elif shape == "square":
                 rect = pygame.Rect(
                     center_x - pulsate_radius,
@@ -479,7 +495,7 @@ class PowerUpManager:
                     pulsate_radius * 2
                 )
                 pygame.draw.rect(surface, color, rect)
-                pygame.draw.rect(surface, self.config.WHITE, rect, 2)
+                pygame.draw.rect(surface, (255, 255, 255), rect, 2)
             elif shape == "triangle":
                 points = [
                     (center_x, int(center_y + bob) - pulsate_radius),
@@ -487,7 +503,7 @@ class PowerUpManager:
                     (center_x + pulsate_radius, int(center_y + bob) + pulsate_radius)
                 ]
                 pygame.draw.polygon(surface, color, points)
-                pygame.draw.polygon(surface, self.config.WHITE, points, 2)
+                pygame.draw.polygon(surface, (255, 255, 255), points, 2)
             elif shape == "shield":
                 # Draw a simple shield shape
                 shield_points = [
@@ -497,7 +513,7 @@ class PowerUpManager:
                     (center_x + pulsate_radius, int(center_y + bob))
                 ]
                 pygame.draw.polygon(surface, color, shield_points)
-                pygame.draw.polygon(surface, self.config.WHITE, shield_points, 2)
+                pygame.draw.polygon(surface, (255, 255, 255), shield_points, 2)
             elif shape == "star":
                 # Draw a 5-pointed star
                 points = []
@@ -508,10 +524,314 @@ class PowerUpManager:
                     y = int(center_y + bob) + r * math.sin(angle)
                     points.append((x, y))
                 pygame.draw.polygon(surface, color, points)
-                pygame.draw.polygon(surface, self.config.WHITE, points, 2)
+                pygame.draw.polygon(surface, (255, 255, 255), points, 2)
             
             # Emit particles to simulate floating
-            particle_system.emit(center_x, center_y + bob, 1)  # Emit small particles continuously
+            # Emit colored particles matching the power-up type
+            particle_system.emit(center_x, center_y + bob, 1, self.get_powerup_particle_color(powerup.type))
+    
+    ##########################
+    # RENDERING
+    ##########################
+    
+    class Renderer:
+        """
+        Handles all game rendering operations.
+        Centralizes drawing logic and screen management.
+        """
+        def __init__(self, config: GameConfig, resources: ResourceManager):
+            self.config = config
+            self.resources = resources
+            
+        def draw_background(self, surface: pygame.Surface,
+                           width: int, height: int) -> None:
+            """Draw background with overlay"""
+            background = self.resources.get_background()
+            if background:
+                bg_scaled = pygame.transform.scale(background, (width, height))
+                surface.blit(bg_scaled, (0, 0))
+            else:
+                surface.fill(self.config.BLACK)
+                
+        def draw_overlay(self, surface: pygame.Surface,
+                        width: int, height: int, alpha: int = 80) -> None:
+            """Draw semi-transparent overlay"""
+            overlay = pygame.Surface((width, height), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, alpha))
+            surface.blit(overlay, (0, 0))
+            
+        def draw_text(self, surface: pygame.Surface, text: str,
+                      x: int, y: int, size: int = 24,
+                      color: Tuple[int, ...] = None,
+                      center: bool = False,
+                      shadow_color: Tuple[int, ...] = None,
+                      glow: bool = False) -> None:
+            """Draw text with optional effects"""
+            if color is None:
+                color = self.config.WHITE
+            if shadow_color is None:
+                shadow_color = self.config.BLACK
+                
+            font = self.resources.get_font(size)
+            
+            # Create shadow effect
+            shadow_offsets = [(2, 2), (2, -2), (-2, 2), (-2, -2)] if glow else [(2, 2)]
+
+            # Handle glowing text effect
+            if glow:
+                glow_surface = pygame.Surface((size * len(text), size), pygame.SRCALPHA)
+                glow_color = (*color[:3], 128)
+                rendered_glow = font.render(text, True, glow_color)
+                for offset in range(3, 0, -1):
+                    glow_rect = rendered_glow.get_rect()
+                    if center:
+                        glow_rect.center = (x + offset, y + offset)
+                    else:
+                        glow_rect.topleft = (x + offset, y + offset)
+                    glow_surface.blit(rendered_glow, glow_rect)
+                # Position glow_surface correctly
+                if center:
+                    surface.blit(glow_surface, (x - size * len(text) // 2, y - size // 2))
+                else:
+                    surface.blit(glow_surface, (x, y))
+            
+            # Draw shadows
+            rendered_shadow = font.render(text, True, shadow_color)
+            for offset_x, offset_y in shadow_offsets:
+                shadow_rect = rendered_shadow.get_rect()
+                if center:
+                    shadow_rect.center = (x + offset_x, y + offset_y)
+                else:
+                    shadow_rect.topleft = (x + offset_x, y + offset_y)
+                surface.blit(rendered_shadow, shadow_rect)
+
+            # Draw main text
+            rendered_text = font.render(text, True, color)
+            text_rect = rendered_text.get_rect()
+            if center:
+                text_rect.center = (x, y)
+            else:
+                text_rect.topleft = (x, y)
+            surface.blit(rendered_text, text_rect)
+        
+        def draw_food(self, surface: pygame.Surface, x: int, y: int,
+                      cell_size: int, frame_count: int) -> None:
+            """Draw food with pulsing glow effect"""
+            center_x = x * cell_size + cell_size // 2
+            center_y = y * cell_size + cell_size // 2
+            base_radius = max(cell_size // 2 - 2, 2)
+
+            # Create pulsing effect
+            pulse = abs(math.sin(frame_count * 0.1)) * 0.3 + 0.7
+
+            # Draw outer glow layers
+            for radius in range(base_radius + 4, base_radius - 1, -1):
+                alpha = int(100 * pulse * (radius - base_radius + 4) / 4)
+                glow_color = (255, 0, 0, alpha)
+                glow_surface = pygame.Surface((radius * 2 + 2, radius * 2 + 2), pygame.SRCALPHA)
+                pygame.draw.circle(glow_surface, glow_color,
+                                 (radius + 1, radius + 1), radius)
+                surface.blit(glow_surface,
+                            (center_x - radius - 1, center_y - radius - 1))
+
+            # Draw main food body
+            core_color = (200, 0, 0)
+            pygame.draw.circle(surface, core_color,
+                             (center_x, center_y), base_radius)
+
+            # Add highlight for depth
+            highlight_pos = (center_x - base_radius // 3,
+                            center_y - base_radius // 3)
+            highlight_radius = max(base_radius // 3, 1)
+            pygame.draw.circle(surface, (255, 128, 128),
+                             highlight_pos, highlight_radius)
+
+        def draw_obstacles(self, surface: pygame.Surface,
+                          obstacles: Set[Tuple[int, int]],
+                          cell_size: int, frame_count: int) -> None:
+            """Draw obstacles with magical appearance"""
+            for ox, oy in obstacles:
+                cx = ox * cell_size + cell_size // 2
+                cy = oy * cell_size + cell_size // 2
+
+                # Animate obstacles
+                pulse = abs(math.sin(frame_count * 0.1)) * 0.3 + 0.7
+                bob = math.sin(frame_count * 0.08) * cell_size * 0.15
+
+                # Create color pulsing
+                color_pulse = abs(math.sin(frame_count * 0.05))
+                base_blue = int(200 + (55 * color_pulse))
+                base_red = int(100 + (40 * color_pulse))
+                base_color = (base_red, 0, base_blue)
+
+                # Calculate size with pulse effect
+                r = max(cell_size // 2 - 2, 2)
+                pulse_radius = int(r * pulse)
+
+                # Draw glow layers
+                for offset in range(4, 0, -1):
+                    glow_radius = pulse_radius + offset
+                    glow_surface = pygame.Surface((glow_radius * 2 + 2, glow_radius * 2 + 2), pygame.SRCALPHA)
+                    alpha = int(128 * (5 - offset) / 4)
+                    glow_color = (60, 130, 255, alpha)
+
+                    pygame.draw.circle(glow_surface, glow_color,
+                                     (glow_radius + 1, glow_radius + 1), glow_radius)
+                    surface.blit(glow_surface,
+                                (cx - glow_radius - 1,
+                                 cy - glow_radius - 1 + bob))
+
+                # Draw main obstacle
+                pygame.draw.circle(surface, base_color,
+                                 (cx, cy + bob), pulse_radius)
+
+                # Add highlight
+                highlight_color = (130, 200, 255)
+                highlight_pos = (cx - pulse_radius // 3,
+                               cy - pulse_radius // 3 + bob)
+                highlight_radius = max(pulse_radius // 3, 1)
+                pygame.draw.circle(surface, highlight_color,
+                                 highlight_pos, highlight_radius)
+    
+    ##########################
+    # SNAKE CLASS
+    ##########################
+
+class Snake:
+    """
+    Represents the snake entity with its movement logic and collision detection.
+    Handles snake movement, growth, and collision checking.
+    Implements conditional wrap-around movement based on invincibility.
+    """
+    def __init__(self, config: GameConfig):
+        self.config = config
+        self.body: List[Tuple[int, int]] = [(5, 5), (4, 5), (3, 5)]
+        self.direction = Direction.RIGHT
+        self.next_direction = Direction.RIGHT
+        self.invincible = False  # Attribute for invincibility
+
+    def set_direction(self, new_direction: Direction) -> None:
+        """Update direction ensuring no 180-degree turns"""
+        if new_direction != self.direction.opposite:
+            self.next_direction = new_direction
+                
+    def move(self, food_pos: Tuple[int, int],
+             obstacles: Set[Tuple[int, int]]) -> bool:
+        """
+        Move snake and check for collisions.
+        Returns False if move results in death.
+        Implements conditional wrap-around based on invincibility.
+        """
+        self.direction = self.next_direction
+        head_x, head_y = self.body[0]
+        
+        # Calculate new head position based on direction
+        if self.direction == Direction.UP:
+            head_y -= 1
+        elif self.direction == Direction.DOWN:
+            head_y += 1
+        elif self.direction == Direction.LEFT:
+            head_x -= 1
+        elif self.direction == Direction.RIGHT:
+            head_x += 1
+        
+        # Handle wall collision
+        if not self.invincible:
+            # If out of bounds, die
+            if head_x < 0 or head_x >= self.config.GRID_COLS or head_y < 0 or head_y >= self.config.GRID_ROWS:
+                return False
+        else:
+            # If invincible, wrap around
+            head_x %= self.config.GRID_COLS
+            head_y %= self.config.GRID_ROWS
+        
+        new_head = (head_x, head_y)
+        self.body.insert(0, new_head)
+        
+        # Check collision with self or obstacles
+        if new_head in self.body[1:] or new_head in obstacles:
+            if not self.invincible:
+                return False
+                
+        # Remove tail if no food eaten
+        if new_head != food_pos:
+            self.body.pop()
+            
+        return True
+
+    def head_position(self) -> Tuple[int, int]:
+        """Returns the current head position of the snake"""
+        return self.body[0]
+    
+    def draw(self, surface: pygame.Surface, cell_size: int,
+             frame_count: int) -> None:
+        """Draw snake with animated effects"""
+        for i, (sx, sy) in enumerate(self.body):
+            center_x = sx * cell_size + cell_size // 2
+            center_y = sy * cell_size + cell_size // 2
+
+            # Calculate wave effect
+            phase = (frame_count * 0.1) + i * 0.3
+            wave = 2 * math.sin(phase)
+
+            if i == 0:  # Head
+                base_r = cell_size // 2
+                radius = max(base_r + int(wave), 2)
+                
+                # Add glow effect to head
+                glow_color = (0, 255, 0, 100) if not self.invincible else (0, 255, 255, 150)
+                glow_surface = pygame.Surface((radius * 2 + 8, radius * 2 + 8), pygame.SRCALPHA)
+                pygame.draw.circle(glow_surface, glow_color,
+                                 (radius + 4, radius + 4), radius + 4)
+                surface.blit(glow_surface, (center_x - radius - 4, center_y - radius - 4))
+                
+                pygame.draw.circle(surface, self.config.BLACK,
+                                 (center_x, center_y), radius + 2)
+                head_color = self.config.GREEN if not self.invincible else self.config.CYAN
+                pygame.draw.circle(surface, head_color,
+                                 (center_x, center_y), radius)
+                
+                # Draw eyes with glow
+                eye_offset = radius // 2
+                eye_pos1 = (center_x - eye_offset // 2,
+                           center_y - eye_offset)
+                eye_pos2 = (center_x + eye_offset // 2,
+                           center_y - eye_offset)
+                eye_r = eye_offset // 3
+                
+                # Eye glow
+                eye_glow_color = (*self.config.WHITE[:3], 128)
+                eye_glow_surface = pygame.Surface((eye_r * 2 + 4, eye_r * 2 + 4), pygame.SRCALPHA)
+                pygame.draw.circle(eye_glow_surface, eye_glow_color,
+                                 (eye_r + 2, eye_r + 2), eye_r + 2)
+                surface.blit(eye_glow_surface, (eye_pos1[0] - eye_r - 2, eye_pos1[1] - eye_r - 2))
+                surface.blit(eye_glow_surface, (eye_pos2[0] - eye_r - 2, eye_pos2[1] - eye_r - 2))
+                
+                # Eyes
+                pygame.draw.circle(surface, self.config.WHITE,
+                                 eye_pos1, eye_r)
+                pygame.draw.circle(surface, self.config.WHITE,
+                                 eye_pos2, eye_r)
+            else:  # Body
+                base_r = max(cell_size // 2 - 2, 2)
+                radius = max(base_r + int(wave), 2)
+                
+                # Add glow effect to body segments
+                glow_color = (0, 200, 0, 80) if not self.invincible else (0, 200, 200, 120)
+                glow_surface = pygame.Surface((radius * 2 + 4, radius * 2 + 4), pygame.SRCALPHA)
+                pygame.draw.circle(glow_surface, glow_color,
+                                 (radius + 2, radius + 2), radius + 2)
+                surface.blit(glow_surface, (center_x - radius - 2, center_y - radius - 2))
+                
+                pygame.draw.circle(surface, self.config.BLACK,
+                                 (center_x, center_y), radius + 2)
+                seg_color = self.config.GREEN if not self.invincible else self.config.CYAN
+                pygame.draw.circle(surface, seg_color,
+                                 (center_x, center_y), radius)
+
+##########################
+# RENDERING
+##########################
 
 class Renderer:
     """
@@ -607,8 +927,7 @@ class Renderer:
         for radius in range(base_radius + 4, base_radius - 1, -1):
             alpha = int(100 * pulse * (radius - base_radius + 4) / 4)
             glow_color = (255, 0, 0, alpha)
-            glow_surface = pygame.Surface((radius * 2 + 2, radius * 2 + 2),
-                                        pygame.SRCALPHA)
+            glow_surface = pygame.Surface((radius * 2 + 2, radius * 2 + 2), pygame.SRCALPHA)
             pygame.draw.circle(glow_surface, glow_color,
                              (radius + 1, radius + 1), radius)
             surface.blit(glow_surface,
@@ -651,9 +970,7 @@ class Renderer:
             # Draw glow layers
             for offset in range(4, 0, -1):
                 glow_radius = pulse_radius + offset
-                glow_surface = pygame.Surface((glow_radius * 2 + 2,
-                                             glow_radius * 2 + 2),
-                                        pygame.SRCALPHA)
+                glow_surface = pygame.Surface((glow_radius * 2 + 2, glow_radius * 2 + 2), pygame.SRCALPHA)
                 alpha = int(128 * (5 - offset) / 4)
                 glow_color = (60, 130, 255, alpha)
 
@@ -689,21 +1006,21 @@ class Renderer:
             # Define icon and label based on power-up type
             if powerup_type == PowerUpType.SPEED_BOOST:
                 label = "Speed Boost"
-                color = self.config.YELLOW
+                color = (255, 255, 0)  # Yellow
             elif powerup_type == PowerUpType.INVINCIBILITY:
                 label = "Invincibility"
-                color = self.config.CYAN
+                color = (0, 255, 255)  # Cyan
             elif powerup_type == PowerUpType.SCORE_MULTIPLIER:
                 label = f"Score x{score_multiplier}"
-                color = self.config.MAGENTA
+                color = (255, 0, 255)  # Magenta
             else:
                 label = "Unknown"
-                color = self.config.WHITE
+                color = (255, 255, 255)  # White
             
             # Draw the power-up icon
             icon_radius = 10
             pygame.draw.circle(surface, color, (10 + icon_radius, y_offset + icon_radius), icon_radius)
-            pygame.draw.circle(surface, self.config.WHITE, (10 + icon_radius, y_offset + icon_radius), icon_radius, 2)
+            pygame.draw.circle(surface, (255, 255, 255), (10 + icon_radius, y_offset + icon_radius), icon_radius, 2)
             
             # Draw the label with remaining time
             time_seconds = remaining // self.config.FPS  # Convert frames to seconds
@@ -711,7 +1028,7 @@ class Renderer:
             # Flashing effect when less than 5 seconds
             if time_seconds <= 5:
                 if frame_count % 30 < 15:
-                    display_color = self.config.RED
+                    display_color = (255, 0, 0)  # Red
                 else:
                     display_color = color
             else:
@@ -720,124 +1037,20 @@ class Renderer:
             
             y_offset += 30  # Increment Y position for the next power-up
 
-class Snake:
-    """
-    Represents the snake entity with its movement logic and collision detection.
-    Handles snake movement, growth, and collision checking.
-    Implements conditional wrap-around movement based on invincibility.
-    """
-    def __init__(self, config: GameConfig):
-        self.config = config
-        self.body: List[Tuple[int, int]] = [(5, 5), (4, 5), (3, 5)]
-        self.direction = Direction.RIGHT
-        self.next_direction = Direction.RIGHT
-        self.invincible = False  # Attribute for invincibility
-
-    def set_direction(self, new_direction: Direction) -> None:
-        """Update direction ensuring no 180-degree turns"""
-        if new_direction != self.direction.opposite:
-            self.next_direction = new_direction
-                
-    def move(self, food_pos: Tuple[int, int],
-             obstacles: Set[Tuple[int, int]]) -> bool:
-        """
-        Move snake and check for collisions.
-        Returns False if move results in death.
-        Implements conditional wrap-around based on invincibility.
-        """
-        self.direction = self.next_direction
-        head_x, head_y = self.body[0]
-        
-        # Calculate new head position based on direction
-        if self.direction == Direction.UP:
-            head_y -= 1
-        elif self.direction == Direction.DOWN:
-            head_y += 1
-        elif self.direction == Direction.LEFT:
-            head_x -= 1
-        elif self.direction == Direction.RIGHT:
-            head_x += 1
-        
-        # Handle wall collision
-        if not self.invincible:
-            # If out of bounds, die
-            if head_x < 0 or head_x >= self.config.GRID_COLS or head_y < 0 or head_y >= self.config.GRID_ROWS:
-                return False
+    def get_powerup_particle_color(self, powerup_type: PowerUpType) -> Tuple[int, int, int]:
+        """Return the color for particles emitted from a power-up"""
+        if powerup_type == PowerUpType.SPEED_BOOST:
+            return (255, 255, 0)  # Yellow
+        elif powerup_type == PowerUpType.INVINCIBILITY:
+            return (0, 255, 255)  # Cyan
+        elif powerup_type == PowerUpType.SCORE_MULTIPLIER:
+            return (255, 0, 255)  # Magenta
         else:
-            # If invincible, wrap around
-            head_x %= self.config.GRID_COLS
-            head_y %= self.config.GRID_ROWS
-        
-        new_head = (head_x, head_y)
-        self.body.insert(0, new_head)
-        
-        # Check collision with self or obstacles
-        if new_head in self.body[1:] or new_head in obstacles:
-            if not self.invincible:
-                return False
-                
-        # Remove tail if no food eaten
-        if new_head != food_pos:
-            self.body.pop()
-            
-        return True
+            return (255, 255, 255)  # White
 
-    def head_position(self) -> Tuple[int, int]:
-        """Returns the current head position of the snake"""
-        return self.body[0]
-    
-    def draw(self, surface: pygame.Surface, cell_size: int,
-             frame_count: int) -> None:
-        """Draw snake with animated effects"""
-        for i, (sx, sy) in enumerate(self.body):
-            center_x = sx * cell_size + cell_size // 2
-            center_y = sy * cell_size + cell_size // 2
-
-            # Calculate wave effect
-            phase = (frame_count * 0.1) + i * 0.3
-            wave = 2 * math.sin(phase)
-
-            if i == 0:  # Head
-                base_r = cell_size // 2
-                radius = max(base_r + int(wave), 2)
-                
-                # Add glow effect to head
-                glow_color = (0, 255, 0, 100) if not self.invincible else (0, 255, 255, 150)
-                pygame.draw.circle(surface, glow_color,
-                                 (center_x, center_y), radius + 4)
-                pygame.draw.circle(surface, self.config.BLACK,
-                                 (center_x, center_y), radius + 2)
-                head_color = self.config.GREEN if not self.invincible else self.config.CYAN
-                pygame.draw.circle(surface, head_color,
-                                 (center_x, center_y), radius)
-                
-                # Draw eyes with glow
-                eye_offset = radius // 2
-                eye_pos1 = (center_x - eye_offset // 2,
-                           center_y - eye_offset)
-                eye_pos2 = (center_x + eye_offset // 2,
-                           center_y - eye_offset)
-                eye_r = eye_offset // 3
-                
-                # Eye glow
-                pygame.draw.circle(surface, (*self.config.WHITE[:3], 128),
-                                 eye_pos1, eye_r + 2)
-                pygame.draw.circle(surface, (*self.config.WHITE[:3], 128),
-                                 eye_pos2, eye_r + 2)
-                
-                # Eyes
-                pygame.draw.circle(surface, self.config.WHITE,
-                                 eye_pos1, eye_r)
-                pygame.draw.circle(surface, self.config.WHITE,
-                                 eye_pos2, eye_r)
-            else:  # Body
-                base_r = max(cell_size // 2 - 2, 2)
-                radius = max(base_r + int(wave), 2)
-                pygame.draw.circle(surface, self.config.BLACK,
-                                 (center_x, center_y), radius + 2)
-                seg_color = self.config.GREEN if not self.invincible else self.config.CYAN
-                pygame.draw.circle(surface, seg_color,
-                                 (center_x, center_y), radius)
+##########################
+# MAIN GAME
+##########################
 
 class Game:
     def __init__(self):
@@ -867,8 +1080,8 @@ class Game:
         )
         logging.info("----- Starting Snake Game -----")
 
-        # Initialize Pygame window
-        self.screen = pygame.display.set_mode((800, 600), pygame.RESIZABLE)
+        # Initialize Pygame window with default size 1920x1080
+        self.screen = pygame.display.set_mode((1920, 1080), pygame.RESIZABLE)
         pygame.display.set_caption("Metal Snake - Reign of the Digital Serpent")
 
         self.clock = pygame.time.Clock()
@@ -1028,7 +1241,7 @@ class Game:
                 self.score += bonus * self.score_multiplier
                 px = head[0] * self.cell_size + self.cell_size//2
                 py = head[1] * self.cell_size + self.cell_size//2
-                self.particles.emit(px, py, self.config.PARTICLE_COUNT)
+                self.particles.emit(px, py, self.config.PARTICLE_COUNT, (255, 0, 0))  # Red particles for food
                 self.food_pos = self.get_random_position()
                 logging.info(f"Food collected! New score: {self.score}")
 
