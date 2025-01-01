@@ -517,7 +517,7 @@ class Snake:
     """
     Represents the snake entity with its movement logic and collision detection.
     Handles snake movement, growth, and collision checking.
-    Implements wrap-around movement to prevent the snake from going off-screen.
+    Implements conditional wrap-around movement based on invincibility.
     """
     def __init__(self, config: GameConfig):
         self.config = config
@@ -536,7 +536,7 @@ class Snake:
         """
         Move snake and check for collisions.
         Returns False if move results in death.
-        Implements wrap-around movement to prevent going off-screen.
+        Implements conditional wrap-around based on invincibility.
         """
         self.direction = self.next_direction
         head_x, head_y = self.body[0]
@@ -551,9 +551,15 @@ class Snake:
         elif self.direction == Direction.RIGHT:
             head_x += 1
         
-        # Implement wrap-around movement
-        head_x %= self.config.GRID_COLS
-        head_y %= self.config.GRID_ROWS
+        # Handle wall collision
+        if not self.invincible:
+            # If out of bounds, die
+            if head_x < 0 or head_x >= self.config.GRID_COLS or head_y < 0 or head_y >= self.config.GRID_ROWS:
+                return False
+        else:
+            # If invincible, wrap around
+            head_x %= self.config.GRID_COLS
+            head_y %= self.config.GRID_ROWS
         
         new_head = (head_x, head_y)
         self.body.insert(0, new_head)
@@ -562,7 +568,7 @@ class Snake:
         if new_head in self.body[1:] or new_head in obstacles:
             if not self.invincible:
                 return False
-            
+                
         # Remove tail if no food eaten
         if new_head != food_pos:
             self.body.pop()
@@ -870,9 +876,9 @@ class Renderer:
                     points.append((x, y))
                 pygame.draw.polygon(surface, color, points)
                 pygame.draw.polygon(surface, self.config.WHITE, points, 2)
-    
+
     def draw_active_powerups(self, surface: pygame.Surface, powerup_manager: 'PowerUpManager',
-                            cell_size: int, frame_count: int, w: int, h: int) -> None:
+                            score_multiplier: int, cell_size: int, frame_count: int, w: int, h: int) -> None:
         """Draw active power-ups with timers"""
         y_offset = 10  # Starting Y position
         for powerup_type, remaining in powerup_manager.active_powerups.items():
@@ -884,7 +890,7 @@ class Renderer:
                 label = "Invincibility"
                 color = self.config.CYAN
             elif powerup_type == PowerUpType.SCORE_MULTIPLIER:
-                label = f"Score x{powerup_manager.score_multiplier}"
+                label = f"Score x{score_multiplier}"
                 color = self.config.MAGENTA
             else:
                 label = "Unknown"
@@ -1119,7 +1125,8 @@ class Game:
         self.renderer.draw_powerups(self.screen, self.powerup_manager, self.cell_size, self.frame_count)
         self.snake.draw(self.screen, self.cell_size, self.frame_count)
         self.particles.update_and_draw(self.screen)
-        self.renderer.draw_active_powerups(self.screen, self.powerup_manager, self.cell_size, self.frame_count, w, h)  # New line
+        # Pass score_multiplier to the renderer
+        self.renderer.draw_active_powerups(self.screen, self.powerup_manager, self.score_multiplier, self.cell_size, self.frame_count, w, h)
         self.renderer.draw_text(self.screen, f"Score: {self.score}", 10, 10, size=24)
         self.renderer.draw_text(self.screen, f"Multiplier: x{self.score_multiplier}", 10, 40, size=24)
 
@@ -1181,10 +1188,11 @@ class Game:
                     self.state = GameState.MENU
                     return
 
-        # Draw background and scores
+        # Draw background and overlay
         self.renderer.draw_background(self.screen, w, h)
         self.renderer.draw_overlay(self.screen, w, h)
 
+        # Draw "HIGH SCORES" title
         self.renderer.draw_text(self.screen, "HIGH SCORES",
                               w//2, 40, size=40,
                               color=self.config.BLUE,
@@ -1207,7 +1215,7 @@ class Game:
             y_offset += 30
 
         # Draw Obstacle Mode scores
-        y_offset += 40
+        y_offset += 20  # Reduced extra space to prevent overlap
         self.renderer.draw_text(self.screen, "Obstacle Mode:",
                               w//2, y_offset, size=28, center=True)
         y_offset += 40
