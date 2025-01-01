@@ -10,6 +10,7 @@ Features include:
 - Improved state management and game flow
 - Comprehensive logging and error handling
 - Enhanced power-up system with distinct visuals and animations
+- Robust sound system with programmatically generated sound effects and background music
 - Responsive design accommodating window resizing
 - Project structure adaptation for development and PyInstaller bundling
 """
@@ -24,6 +25,8 @@ import logging
 from typing import Tuple, Set, List, Optional, Dict, Any
 from dataclasses import dataclass
 from enum import Enum, auto
+import numpy as np
+import io
 
 # Ensure appdirs is installed for user-specific directories (optional but recommended)
 try:
@@ -99,8 +102,8 @@ class GameConfig:
         PowerUpType.INVINCIBILITY,
         PowerUpType.SCORE_MULTIPLIER,
     )
-    POWERUP_SPAWN_INTERVAL: int = 400  # Frames between power-up spawns
-    POWERUP_DURATION: int = 500  # Frames power-up effect lasts
+    POWERUP_SPAWN_INTERVAL: int = 500  # Frames between power-up spawns
+    POWERUP_DURATION: int = 300  # Frames power-up effect lasts
     POWERUP_COUNT: int = 3  # Maximum number of active power-ups
     
     # Colors (as RGB tuples)
@@ -130,16 +133,9 @@ class ResourceManager:
         # Determine base paths
         self.base_path = self.get_base_path()
 
-        # Load and start background music
-        music_path = self.resource_path(os.path.join("audio", "MidnightCarnage.mp3"))
-        if not os.path.exists(music_path):
-            self.logger.error(f"Background music file not found at {music_path}")
-        try:
-            pygame.mixer.music.load(music_path)
-            pygame.mixer.music.play(-1)  # -1 means loop indefinitely
-            self.logger.info("Background music loaded and playing.")
-        except Exception as e:
-            self.logger.warning(f"Could not load 'MidnightCarnage.mp3': {e}")
+        # Load and start background music (if any)
+        # For this implementation, we'll omit background music as sound effects are synthesized
+        # If you wish to add background music, you can implement it similarly to sound effects
 
     def get_base_path(self) -> str:
         """Determine the base path for resources"""
@@ -202,7 +198,6 @@ class ResourceManager:
 
     def cleanup(self) -> None:
         """Release all loaded resources"""
-        pygame.mixer.music.stop()
         self._background = None
         self._font_cache.clear()
         self.logger.info("Resources cleaned up")
@@ -356,14 +351,17 @@ class PowerUp:
         if self.type == PowerUpType.SPEED_BOOST:
             game.config.GAME_SPEED += 5  # Increase game speed
             game.powerup_manager.active_powerups[self.type] = self.duration  # Correct reference
+            game.sound_manager.play_powerup_sound(self.type)
             logging.info("Speed Boost activated!")
         elif self.type == PowerUpType.INVINCIBILITY:
             game.snake.invincible = True
             game.powerup_manager.active_powerups[self.type] = self.duration  # Correct reference
+            game.sound_manager.play_powerup_sound(self.type)
             logging.info("Invincibility activated!")
         elif self.type == PowerUpType.SCORE_MULTIPLIER:
             game.score_multiplier += 1  # Increment multiplier
             game.powerup_manager.active_powerups[self.type] = self.duration  # Correct reference
+            game.sound_manager.play_powerup_sound(self.type)
             logging.info(f"Score Multiplier activated! Current multiplier: x{game.score_multiplier}")
     
     def expire(self, game: 'Game') -> None:
@@ -426,7 +424,7 @@ class PowerUpManager:
                 temp_powerup = PowerUp(0, 0, powerup_type, self.config)
                 temp_powerup.expire(game)
                 logging.info(f"Power-up {powerup_type.name} expired.")
-        
+    
         # Check for power-up collection
         head = game.snake.head_position()
         for powerup in self.powerups[:]:  # Use slice copy to safely modify during iteration
@@ -507,6 +505,307 @@ class PowerUpManager:
                     center_x, center_y + bob, 1,
                     self.get_powerup_particle_color(powerup.type)
                 )
+
+##########################
+# SOUND SYNTHESIS AND MANAGER
+##########################
+
+class SoundSynthesizer:
+    """
+    Generates game sound effects using digital sound synthesis.
+    Creates sounds programmatically instead of loading from files.
+    """
+    def __init__(self):
+        # Standard audio parameters
+        self.sample_rate = 44100  # CD quality audio
+        self.amplitude = 0.3      # Default volume (reduced to prevent clipping)
+    
+    def create_sine_wave(self, frequency: float, duration: float) -> np.ndarray:
+        """
+        Creates a sine wave of given frequency and duration.
+        This is the most basic building block of sound synthesis.
+        """
+        t = np.linspace(0, duration, int(self.sample_rate * duration), False)
+        return np.sin(2 * np.pi * frequency * t)
+    
+    def apply_envelope(self, samples: np.ndarray, attack: float = 0.1, 
+                      decay: float = 0.1, sustain: float = 0.7,
+                      release: float = 0.1) -> np.ndarray:
+        """
+        Applies an ADSR envelope to a sound.
+        This shapes the amplitude over time to create more natural sounds.
+        """
+        total_length = len(samples)
+        envelope = np.ones(total_length)
+        
+        # Calculate segment lengths
+        attack_len = int(attack * total_length)
+        decay_len = int(decay * total_length)
+        release_len = int(release * total_length)
+        sustain_len = total_length - attack_len - decay_len - release_len
+        
+        # Create envelope segments
+        envelope[:attack_len] = np.linspace(0, 1, attack_len)
+        envelope[attack_len:attack_len + decay_len] = np.linspace(1, sustain, decay_len)
+        envelope[attack_len + decay_len:-release_len] = sustain
+        envelope[-release_len:] = np.linspace(sustain, 0, release_len)
+        
+        return samples * envelope
+    
+    def create_noise(self, duration: float) -> np.ndarray:
+        """
+        Creates white noise, useful for percussive and texture sounds.
+        """
+        samples = np.random.uniform(-1, 1, int(self.sample_rate * duration))
+        return samples
+    
+    def apply_lowpass_filter(self, samples: np.ndarray, cutoff: float) -> np.ndarray:
+        """
+        Applies a simple lowpass filter to smooth out harsh frequencies.
+        """
+        # Simple moving average filter
+        window_size = int(self.sample_rate / cutoff)
+        window = np.ones(window_size) / window_size
+        return np.convolve(samples, window, mode='same')
+    
+    def create_powerup_sound(self) -> pygame.mixer.Sound:
+        """
+        Creates an ascending magical sound for power-up collection.
+        Combines multiple frequencies with pitch modulation.
+        """
+        duration = 0.5
+        t = np.linspace(0, duration, int(self.sample_rate * duration), False)
+        
+        # Create ascending frequency
+        freq_start = 220
+        freq_end = 880
+        frequency = np.linspace(freq_start, freq_end, len(t))
+        
+        # Generate main tone with frequency modulation
+        main_tone = np.sin(2 * np.pi * frequency * t)
+        
+        # Add harmonics for richness
+        harmonic1 = 0.5 * np.sin(4 * np.pi * frequency * t)
+        harmonic2 = 0.25 * np.sin(6 * np.pi * frequency * t)
+        
+        # Combine waves
+        combined = main_tone + harmonic1 + harmonic2
+        
+        # Apply envelope for smooth start/end
+        sound = self.apply_envelope(combined, attack=0.1, decay=0.1, sustain=0.6, release=0.2)
+        
+        return self.create_pygame_sound(sound)
+    
+    def create_movement_sound(self) -> pygame.mixer.Sound:
+        """
+        Creates a soft swooshing sound for snake movement.
+        Uses filtered noise with frequency modulation.
+        """
+        duration = 0.15
+        
+        # Create noise base
+        noise = self.create_noise(duration)
+        
+        # Apply bandpass filtering to create swoosh effect
+        filtered_noise = self.apply_lowpass_filter(noise, 1000)
+        
+        # Add subtle sine wave for tone
+        t = np.linspace(0, duration, len(filtered_noise), False)
+        tone = 0.3 * np.sin(2 * np.pi * 200 * t)
+        
+        # Combine and shape
+        combined = filtered_noise + tone
+        sound = self.apply_envelope(combined, attack=0.05, decay=0.05, sustain=0.5, release=0.4)
+        
+        return self.create_pygame_sound(combined)
+    
+    def create_food_pickup_sound(self) -> pygame.mixer.Sound:
+        """
+        Creates a bright, short sound for food collection.
+        Uses multiple harmonics for a rich, pleasant tone.
+        """
+        duration = 0.2
+        frequencies = [440, 880, 1320]  # Root note and harmonics
+        amplitudes = [1.0, 0.5, 0.25]   # Decreasing amplitude for harmonics
+        
+        combined = np.zeros(int(self.sample_rate * duration))
+        
+        # Add harmonics
+        for freq, amp in zip(frequencies, amplitudes):
+            wave = self.create_sine_wave(freq, duration)
+            combined += amp * wave
+        
+        # Shape the sound with quick attack and decay
+        sound = self.apply_envelope(combined, attack=0.05, decay=0.15, sustain=0.6, release=0.2)
+        
+        return self.create_pygame_sound(sound)
+    
+    def create_game_over_sound(self) -> pygame.mixer.Sound:
+        """
+        Creates a dramatic descending sound for game over.
+        Combines multiple descending tones with reverb effect.
+        """
+        duration = 1.0
+        t = np.linspace(0, duration, int(self.sample_rate * duration), False)
+        
+        # Create descending frequencies
+        freq_start = 440
+        freq_end = 110
+        frequency = np.linspace(freq_start, freq_end, len(t))
+        
+        # Generate main tone
+        main_tone = np.sin(2 * np.pi * frequency * t)
+        
+        # Add lower octave
+        low_tone = 0.5 * np.sin(np.pi * frequency * t)
+        
+        # Add noise for texture
+        noise = 0.1 * self.create_noise(duration)
+        
+        # Combine everything
+        combined = main_tone + low_tone + noise
+        
+        # Apply dramatic envelope
+        sound = self.apply_envelope(combined, attack=0.1, decay=0.3, sustain=0.4, release=0.2)
+        
+        return self.create_pygame_sound(combined)
+    
+    def create_pygame_sound(self, samples: np.ndarray) -> pygame.mixer.Sound:
+        """
+        Converts numpy samples to a Pygame sound object.
+        Handles audio scaling and conversion to the correct format.
+        """
+        # Normalize to prevent clipping
+        samples = np.int16(samples * 32767 * self.amplitude)
+        
+        # Create a Python bytes buffer
+        buffer = samples.tobytes()
+        
+        # Create Pygame sound from buffer
+        sound = pygame.mixer.Sound(buffer=buffer)
+        return sound
+
+class SoundManager:
+    """
+    Manages all game audio including sound effects and background music.
+    Uses channel-based mixing for simultaneous sound playback.
+    Provides volume control and audio mixing between different sound types.
+    """
+    def __init__(self, config: GameConfig, resource_manager: ResourceManager):
+        self.config = config
+        self.resource_manager = resource_manager
+        self.logger = logging.getLogger(__name__)
+        
+        # Initialize sound mixing with multiple channels
+        pygame.mixer.set_num_channels(32)  # Allow many simultaneous sounds
+        
+        # Create dedicated channels for different sound types
+        self.movement_channel = pygame.mixer.Channel(0)  # Snake movement sounds
+        self.pickup_channel = pygame.mixer.Channel(1)    # Food and power-up collection
+        self.effect_channel = pygame.mixer.Channel(2)    # Power-up active effects
+        self.ui_channel = pygame.mixer.Channel(3)        # UI and menu sounds
+        
+        # Create synthesizer for effects
+        self.synthesizer = SoundSynthesizer()
+        
+        # Create and cache sound effects
+        self._sound_cache = {
+            'move': self.synthesizer.create_movement_sound(),
+            'food_pickup': self.synthesizer.create_food_pickup_sound(),
+            'powerup': self.synthesizer.create_powerup_sound(),
+            'game_over': self.synthesizer.create_game_over_sound()
+        }
+        
+        # Volume settings (keeping music quieter than effects)
+        self.master_volume = 0.7
+        self.music_volume = 0.3  # Reduced music volume
+        self.sfx_volume = 0.5
+        
+        # Movement sound timer to prevent too frequent sounds
+        self.last_movement_sound = 0
+        self.movement_sound_interval = 150  # Milliseconds between movement sounds
+        
+        # Start background music
+        self._init_background_music()
+    
+    def _init_background_music(self) -> None:
+        """Initialize and start background music playback"""
+        try:
+            music_path = self.resource_manager.resource_path(os.path.join("audio", "MidnightCarnage.mp3"))
+            if os.path.exists(music_path):
+                pygame.mixer.music.load(music_path)
+                pygame.mixer.music.set_volume(self.master_volume * self.music_volume)
+                pygame.mixer.music.play(-1)  # Loop indefinitely
+                self.logger.info("Background music started successfully")
+            else:
+                self.logger.warning("Background music file not found")
+        except Exception as e:
+            self.logger.error(f"Failed to initialize background music: {e}")
+    
+    def play_sound(self, sound_name: str, channel: Optional[pygame.mixer.Channel] = None,
+                  volume: float = 1.0) -> None:
+        """Play a sound effect with volume adjustment"""
+        sound = self._sound_cache.get(sound_name)
+        if sound is None:
+            return
+        
+        # Apply volume settings
+        final_volume = self.master_volume * self.sfx_volume * volume
+        sound.set_volume(final_volume)
+        
+        # Play on specified channel or any free one
+        if channel and not channel.get_busy():
+            channel.play(sound)
+        elif not channel:
+            free_channel = pygame.mixer.find_channel(True)
+            if free_channel:
+                free_channel.play(sound)
+    
+    def play_movement_sound(self, speed: float) -> None:
+        """
+        Play movement sound with rate limiting.
+        Prevents sound overlap at high speeds.
+        """
+        current_time = pygame.time.get_ticks()
+        if current_time - self.last_movement_sound >= self.movement_sound_interval:
+            # Calculate volume based on speed but keep it subtle
+            volume = min(0.3, 0.2 * (speed / self.config.BASE_GAME_SPEED))
+            self.play_sound('move', self.movement_channel, volume=volume)
+            self.last_movement_sound = current_time
+    
+    def play_powerup_sound(self, powerup_type: PowerUpType) -> None:
+        """Play power-up collection sound"""
+        self.play_sound('powerup', self.pickup_channel, volume=0.6)
+    
+    def play_game_over_sound(self) -> None:
+        """Play game over sound and pause background music"""
+        pygame.mixer.music.pause()  # Pause background music
+        self.play_sound('game_over', self.effect_channel, volume=0.7)
+    
+    def play_menu_sound(self, action: str) -> None:
+        """Play UI sound for menu interactions"""
+        if action == 'select':
+            # You can create and add more sounds as needed
+            self.play_sound('powerup', self.ui_channel, volume=0.4)
+        elif action == 'move':
+            self.play_sound('food_pickup', self.ui_channel, volume=0.2)
+    
+    def resume_music(self) -> None:
+        """Resume background music playback"""
+        pygame.mixer.music.unpause()
+        pygame.mixer.music.set_volume(self.master_volume * self.music_volume)
+    
+    def set_master_volume(self, volume: float) -> None:
+        """Set master volume level and update all active sounds"""
+        self.master_volume = max(0.0, min(1.0, volume))
+        pygame.mixer.music.set_volume(self.master_volume * self.music_volume)
+    
+    def cleanup(self) -> None:
+        """Clean up sound resources"""
+        pygame.mixer.music.stop()
+        self._sound_cache.clear()
+        pygame.mixer.stop()
+        self.logger.info("Sound system cleaned up")
 
 ##########################
 # RENDERER CLASS
@@ -900,6 +1199,7 @@ class Game:
         self.particles = ParticleSystem(self.config)
         self.renderer = Renderer(self.config, self.resources)
         self.powerup_manager = PowerUpManager(self.config)
+        self.sound_manager = SoundManager(self.config, self.resources)  # Initialize SoundManager
 
         # Set up logging after ResourceManager to use correct log path
         log_path = self.resources.get_log_path("snake_game.log")
@@ -948,6 +1248,8 @@ class Game:
         self.score_multiplier = 1
         self.config.GAME_SPEED = self.config.BASE_GAME_SPEED  # Reset game speed
         self.snake.invincible = False  # Reset invincibility
+        pygame.mixer.music.unpause()  # Ensure music is playing
+        self.sound_manager.resume_music()
         logging.info("Game has been reset.")
 
     def get_random_position(self, include_powerups: bool = False) -> Tuple[int, int]:
@@ -1009,11 +1311,14 @@ class Game:
                 if event.key == pygame.K_p:
                     self.state = GameState.PLAY
                     self.reset_game()
+                    self.sound_manager.play_menu_sound('select')
                 elif event.key == pygame.K_h:
                     self.state = GameState.HIGHSCORES
+                    self.sound_manager.play_menu_sound('select')
                 elif event.key == pygame.K_o:
                     self.obstacles_enabled = not self.obstacles_enabled
                     logging.info(f"Obstacles toggled to {'ON' if self.obstacles_enabled else 'OFF'}.")
+                    self.sound_manager.play_menu_sound('move')
                 elif event.key == pygame.K_ESCAPE:
                     self.cleanup()
                     sys.exit()
@@ -1055,6 +1360,7 @@ class Game:
                     self.snake.set_direction(Direction.RIGHT)
                 elif event.key == pygame.K_ESCAPE:
                     self.state = GameState.MENU
+                    self.sound_manager.play_menu_sound('select')
 
         # Update game logic at fixed rate
         should_update = self.frame_count % (self.config.FPS // self.config.GAME_SPEED) == 0
@@ -1066,8 +1372,12 @@ class Game:
                 self.TEMP_SCORE = self.score
                 self.TEMP_MODE = "obstacles" if self.obstacles_enabled else "classic"
                 self.state = GameState.GAME_OVER
+                self.sound_manager.play_game_over_sound()
                 logging.info(f"Game Over! Score: {self.TEMP_SCORE}, Mode: {self.TEMP_MODE}")
                 return
+
+            # Play movement sound
+            self.sound_manager.play_movement_sound(self.config.GAME_SPEED)
 
             # Check food collection
             head = self.snake.body[0]
@@ -1078,6 +1388,7 @@ class Game:
                 py = head[1] * self.cell_size + self.cell_size//2
                 self.particles.emit(px, py, self.config.PARTICLE_COUNT, (255, 0, 0))  # Red particles for food
                 self.food_pos = self.get_random_position()
+                self.sound_manager.play_sound('food_pickup', self.sound_manager.pickup_channel)
                 logging.info(f"Food collected! New score: {self.score}")
 
         # Update power-ups
@@ -1109,15 +1420,20 @@ class Game:
                     logging.info(f"High score added: {final_name} - {self.TEMP_SCORE} in {self.TEMP_MODE} mode.")
                     Game.player_name = ""
                     self.state = GameState.MENU
+                    self.sound_manager.play_menu_sound('select')
+                    self.sound_manager.resume_music()
                 elif event.key == pygame.K_h:
                     final_name = Game.player_name.strip() or "Player"
                     self.score_manager.add_score(final_name, self.TEMP_SCORE, self.TEMP_MODE)
                     logging.info(f"High score added: {final_name} - {self.TEMP_SCORE} in {self.TEMP_MODE} mode.")
                     Game.player_name = ""
                     self.state = GameState.HIGHSCORES
+                    self.sound_manager.play_menu_sound('select')
                 elif event.key == pygame.K_ESCAPE:
                     Game.player_name = ""
                     self.state = GameState.MENU
+                    self.sound_manager.play_menu_sound('select')
+                    self.sound_manager.resume_music()
                 elif event.key == pygame.K_BACKSPACE:
                     Game.player_name = Game.player_name[:-1]
                 else:
@@ -1153,6 +1469,7 @@ class Game:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     self.state = GameState.MENU
+                    self.sound_manager.play_menu_sound('select')
                     return
 
         # Draw background and overlay
@@ -1200,6 +1517,7 @@ class Game:
     def cleanup(self) -> None:
         """Clean up resources before exit"""
         self.resources.cleanup()
+        self.sound_manager.cleanup()
         pygame.quit()
         logging.info("----- Game cleanup completed -----")
 
