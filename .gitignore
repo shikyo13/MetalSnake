@@ -1,0 +1,20 @@
+# Build and distribution
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+*.class
+
+# Environment
+.env
+.venv
+env/
+venv/
+
+# Game-specific
+logs/
+*.log
+.webui_secret_key

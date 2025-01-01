@@ -1,0 +1,46 @@
+{
+    "classic": [
+        {
+            "name": "Adam",
+            "score": 31
+        },
+        {
+            "name": "Adam",
+            "score": 30
+        },
+        {
+            "name": "Adam",
+            "score": 20
+        },
+        {
+            "name": "Adam",
+            "score": 18
+        },
+        {
+            "name": "Player",
+            "score": 11
+        }
+    ],
+    "obstacles": [
+        {
+            "name": "Adam",
+            "score": 9
+        },
+        {
+            "name": "Adam",
+            "score": 9
+        },
+        {
+            "name": "Adam",
+            "score": 0
+        },
+        {
+            "name": "Player",
+            "score": 0
+        },
+        {
+            "name": "Adam",
+            "score": 0
+        }
+    ]
+}
