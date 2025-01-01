@@ -99,8 +99,8 @@ class GameConfig:
         PowerUpType.INVINCIBILITY,
         PowerUpType.SCORE_MULTIPLIER,
     )
-    POWERUP_SPAWN_INTERVAL: int = 500  # Frames between power-up spawns
-    POWERUP_DURATION: int = 300  # Frames power-up effect lasts
+    POWERUP_SPAWN_INTERVAL: int = 400  # Frames between power-up spawns
+    POWERUP_DURATION: int = 500  # Frames power-up effect lasts
     POWERUP_COUNT: int = 3  # Maximum number of active power-ups
     
     # Colors (as RGB tuples)
@@ -355,27 +355,33 @@ class PowerUp:
         """Apply the power-up effect to the game"""
         if self.type == PowerUpType.SPEED_BOOST:
             game.config.GAME_SPEED += 5  # Increase game speed
-            game.active_powerups[self.type] = self.duration
+            game.powerup_manager.active_powerups[self.type] = self.duration  # Correct reference
             logging.info("Speed Boost activated!")
         elif self.type == PowerUpType.INVINCIBILITY:
             game.snake.invincible = True
-            game.active_powerups[self.type] = self.duration
+            game.powerup_manager.active_powerups[self.type] = self.duration  # Correct reference
             logging.info("Invincibility activated!")
         elif self.type == PowerUpType.SCORE_MULTIPLIER:
             game.score_multiplier += 1  # Increment multiplier
-            game.active_powerups[self.type] = self.duration
+            game.powerup_manager.active_powerups[self.type] = self.duration  # Correct reference
             logging.info(f"Score Multiplier activated! Current multiplier: x{game.score_multiplier}")
     
     def expire(self, game: 'Game') -> None:
         """Expire the power-up effect from the game"""
         if self.type == PowerUpType.SPEED_BOOST:
             game.config.GAME_SPEED -= 5  # Revert game speed
+            if self.type in game.powerup_manager.active_powerups:
+                del game.powerup_manager.active_powerups[self.type]
             logging.info("Speed Boost expired!")
         elif self.type == PowerUpType.INVINCIBILITY:
             game.snake.invincible = False
+            if self.type in game.powerup_manager.active_powerups:
+                del game.powerup_manager.active_powerups[self.type]
             logging.info("Invincibility expired!")
         elif self.type == PowerUpType.SCORE_MULTIPLIER:
             game.score_multiplier = max(1, game.score_multiplier - 1)  # Decrement multiplier but not below 1
+            if self.type in game.powerup_manager.active_powerups:
+                del game.powerup_manager.active_powerups[self.type]
             logging.info(f"Score Multiplier expired! Current multiplier: x{game.score_multiplier}")
     
     def update_timer(self) -> None:
@@ -406,23 +412,25 @@ class PowerUpManager:
     
     def update(self, game: 'Game') -> None:
         """Update power-ups, spawn new ones, and handle expiration"""
+        # Update spawn timer
         self.spawn_timer += 1
         if self.spawn_timer >= self.config.POWERUP_SPAWN_INTERVAL:
             self.spawn_powerup(game)
             self.spawn_timer = 0
 
-        # Update power-up timers and expire if necessary
-        for powerup in self.powerups[:]:
-            powerup.update_timer()
-            if powerup.remaining_duration <= 0:
-                powerup.expire(game)
-                self.powerups.remove(powerup)
-                logging.info(f"Power-up {powerup.type.name} expired.")
+        # Update active power-up durations
+        for powerup_type in list(self.active_powerups.keys()):  # Create a copy of keys to modify dict during iteration
+            self.active_powerups[powerup_type] -= 1
+            if self.active_powerups[powerup_type] <= 0:
+                # Create a temporary PowerUp object to handle expiration
+                temp_powerup = PowerUp(0, 0, powerup_type, self.config)
+                temp_powerup.expire(game)
+                logging.info(f"Power-up {powerup_type.name} expired.")
         
         # Check for power-up collection
         head = game.snake.head_position()
-        for powerup in self.powerups[:]:
-            if head == (powerup.x, powerup.y):
+        for powerup in self.powerups[:]:  # Use slice copy to safely modify during iteration
+            if head == powerup.position():
                 powerup.apply(game)
                 self.powerups.remove(powerup)
                 game.score += 5 * game.score_multiplier  # Bonus for collecting power-up
@@ -480,11 +488,11 @@ class PowerUpManager:
                                  (radius + 1, radius + 1), radius)
                 surface.blit(glow_surface,
                             (center_x - radius - 1, center_y - radius - 1 + bob))
-    
+
             # Draw main power-up body
             pygame.draw.circle(surface, core_color,
                              (center_x, center_y + bob), base_radius)
-    
+
             # Add highlight for depth
             highlight_pos = (center_x - base_radius // 3,
                            center_y - base_radius // 3 + bob)
@@ -492,13 +500,17 @@ class PowerUpManager:
             highlight_color = tuple(min(255, c + 100) for c in core_color)
             pygame.draw.circle(surface, highlight_color,
                              highlight_pos, highlight_radius)
-    
+
             # Emit particles for floating effect
             if frame_count % 10 == 0:  # Reduced particle emission rate
                 particle_system.emit(
                     center_x, center_y + bob, 1,
                     self.get_powerup_particle_color(powerup.type)
                 )
+
+##########################
+# RENDERER CLASS
+##########################
 
 class Renderer:
     """
@@ -659,7 +671,7 @@ class Renderer:
             highlight_radius = max(pulse_radius // 3, 1)
             pygame.draw.circle(surface, highlight_color,
                              highlight_pos, highlight_radius)
-    
+
     def draw_powerups(self, surface: pygame.Surface, powerup_manager: 'PowerUpManager',
                      cell_size: int, frame_count: int, particle_system: ParticleSystem) -> None:
         """Draw all active power-ups with enhanced visuals and animations, matching food depth style"""
@@ -866,241 +878,6 @@ class Snake:
                 seg_color = self.config.GREEN if not self.invincible else self.config.CYAN
                 pygame.draw.circle(surface, seg_color,
                                  (center_x, center_y), radius)
-
-##########################
-# RENDERING
-##########################
-
-class Renderer:
-    """
-    Handles all game rendering operations.
-    Centralizes drawing logic and screen management.
-    """
-    def __init__(self, config: GameConfig, resources: ResourceManager):
-        self.config = config
-        self.resources = resources
-        
-    def draw_background(self, surface: pygame.Surface,
-                       width: int, height: int) -> None:
-        """Draw background with overlay"""
-        background = self.resources.get_background()
-        if background:
-            bg_scaled = pygame.transform.scale(background, (width, height))
-            surface.blit(bg_scaled, (0, 0))
-        else:
-            surface.fill(self.config.BLACK)
-            
-    def draw_overlay(self, surface: pygame.Surface,
-                    width: int, height: int, alpha: int = 80) -> None:
-        """Draw semi-transparent overlay"""
-        overlay = pygame.Surface((width, height), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, alpha))
-        surface.blit(overlay, (0, 0))
-        
-    def draw_text(self, surface: pygame.Surface, text: str,
-                  x: int, y: int, size: int = 24,
-                  color: Tuple[int, ...] = None,
-                  center: bool = False,
-                  shadow_color: Tuple[int, ...] = None,
-                  glow: bool = False) -> None:
-        """Draw text with optional effects"""
-        if color is None:
-            color = self.config.WHITE
-        if shadow_color is None:
-            shadow_color = self.config.BLACK
-            
-        font = self.resources.get_font(size)
-        
-        # Create shadow effect
-        shadow_offsets = [(2, 2), (2, -2), (-2, 2), (-2, -2)] if glow else [(2, 2)]
-
-        # Handle glowing text effect
-        if glow:
-            glow_surface = pygame.Surface((size * len(text), size), pygame.SRCALPHA)
-            glow_color = (*color[:3], 128)
-            rendered_glow = font.render(text, True, glow_color)
-            for offset in range(3, 0, -1):
-                glow_rect = rendered_glow.get_rect()
-                if center:
-                    glow_rect.center = (x + offset, y + offset)
-                else:
-                    glow_rect.topleft = (x + offset, y + offset)
-                glow_surface.blit(rendered_glow, glow_rect)
-            # Position glow_surface correctly
-            if center:
-                surface.blit(glow_surface, (x - size * len(text) // 2, y - size // 2))
-            else:
-                surface.blit(glow_surface, (x, y))
-        
-        # Draw shadows
-        rendered_shadow = font.render(text, True, shadow_color)
-        for offset_x, offset_y in shadow_offsets:
-            shadow_rect = rendered_shadow.get_rect()
-            if center:
-                shadow_rect.center = (x + offset_x, y + offset_y)
-            else:
-                shadow_rect.topleft = (x + offset_x, y + offset_y)
-            surface.blit(rendered_shadow, shadow_rect)
-
-        # Draw main text
-        rendered_text = font.render(text, True, color)
-        text_rect = rendered_text.get_rect()
-        if center:
-            text_rect.center = (x, y)
-        else:
-            text_rect.topleft = (x, y)
-        surface.blit(rendered_text, text_rect)
-    
-    def draw_food(self, surface: pygame.Surface, x: int, y: int,
-                  cell_size: int, frame_count: int) -> None:
-        """Draw food with pulsing glow effect"""
-        center_x = x * cell_size + cell_size // 2
-        center_y = y * cell_size + cell_size // 2
-        base_radius = max(cell_size // 2 - 2, 2)
-
-        # Create pulsing effect
-        pulse = abs(math.sin(frame_count * 0.1)) * 0.3 + 0.7
-
-        # Draw outer glow layers
-        for radius in range(base_radius + 4, base_radius - 1, -1):
-            alpha = int(100 * pulse * (radius - base_radius + 4) / 4)
-            glow_color = (255, 0, 0, alpha)
-            glow_surface = pygame.Surface((radius * 2 + 2, radius * 2 + 2), pygame.SRCALPHA)
-            pygame.draw.circle(glow_surface, glow_color,
-                             (radius + 1, radius + 1), radius)
-            surface.blit(glow_surface,
-                        (center_x - radius - 1, center_y - radius - 1))
-
-        # Draw main food body
-        core_color = (200, 0, 0)
-        pygame.draw.circle(surface, core_color,
-                         (center_x, center_y), base_radius)
-
-        # Add highlight for depth
-        highlight_pos = (center_x - base_radius // 3,
-                        center_y - base_radius // 3)
-        highlight_radius = max(base_radius // 3, 1)
-        pygame.draw.circle(surface, (255, 128, 128),
-                         highlight_pos, highlight_radius)
-
-    def draw_obstacles(self, surface: pygame.Surface,
-                      obstacles: Set[Tuple[int, int]],
-                      cell_size: int, frame_count: int) -> None:
-        """Draw obstacles with magical appearance"""
-        for ox, oy in obstacles:
-            cx = ox * cell_size + cell_size // 2
-            cy = oy * cell_size + cell_size // 2
-
-            # Animate obstacles
-            pulse = abs(math.sin(frame_count * 0.1)) * 0.3 + 0.7
-            bob = math.sin(frame_count * 0.08) * cell_size * 0.15
-
-            # Create color pulsing
-            color_pulse = abs(math.sin(frame_count * 0.05))
-            base_blue = int(200 + (55 * color_pulse))
-            base_red = int(100 + (40 * color_pulse))
-            base_color = (base_red, 0, base_blue)
-
-            # Calculate size with pulse effect
-            r = max(cell_size // 2 - 2, 2)
-            pulse_radius = int(r * pulse)
-
-            # Draw glow layers
-            for offset in range(4, 0, -1):
-                glow_radius = pulse_radius + offset
-                glow_surface = pygame.Surface((glow_radius * 2 + 2, glow_radius * 2 + 2), pygame.SRCALPHA)
-                alpha = int(128 * (5 - offset) / 4)
-                glow_color = (60, 130, 255, alpha)
-
-                pygame.draw.circle(glow_surface, glow_color,
-                                 (glow_radius + 1, glow_radius + 1),
-                                 glow_radius)
-                surface.blit(glow_surface,
-                            (cx - glow_radius - 1,
-                             cy - glow_radius - 1 + bob))
-
-            # Draw main obstacle
-            pygame.draw.circle(surface, base_color,
-                             (cx, cy + bob), pulse_radius)
-
-            # Add highlight
-            highlight_color = (130, 200, 255)
-            highlight_pos = (cx - pulse_radius // 3,
-                           cy - pulse_radius // 3 + bob)
-            highlight_radius = max(pulse_radius // 3, 1)
-            pygame.draw.circle(surface, highlight_color,
-                             highlight_pos, highlight_radius)
-    
-    def draw_powerups(self, surface: pygame.Surface, powerup_manager: 'PowerUpManager',
-                     cell_size: int, frame_count: int, particle_system: ParticleSystem) -> None:
-        """Draw all active power-ups with enhanced visuals and animations, matching food depth style"""
-        powerup_manager.draw(surface, cell_size, frame_count, particle_system)
-    
-    def draw_active_powerups_status(self, surface: pygame.Surface,
-                                  powerup_manager: 'PowerUpManager',
-                                  score_multiplier: int,
-                                  frame_count: int) -> None:
-        """Draw active power-ups status display in top right corner"""
-        screen_width = surface.get_width()
-        padding = 10
-        y_offset = padding
-        status_height = 30
-        icon_size = status_height - 4
-
-        for powerup_type, remaining in powerup_manager.active_powerups.items():
-            # Calculate position for status bar
-            x_pos = screen_width - 220 - padding  # Adjusted to accommodate icon and text
-
-            # Get power-up properties
-            if powerup_type == PowerUpType.SPEED_BOOST:
-                label = "Speed Boost"
-                color = (255, 255, 0)  # Yellow
-                dark_color = (200, 200, 0)
-            elif powerup_type == PowerUpType.INVINCIBILITY:
-                label = "Invincibility"
-                color = (0, 255, 255)  # Cyan
-                dark_color = (0, 180, 180)
-            elif powerup_type == PowerUpType.SCORE_MULTIPLIER:
-                label = f"Score x{score_multiplier}"
-                color = (255, 0, 255)  # Magenta
-                dark_color = (180, 0, 180)
-            else:
-                label = "Unknown"
-                color = (255, 255, 255)  # White
-                dark_color = (255, 255, 255)
-
-            # Draw the power-up icon
-            icon_x = x_pos + 10
-            icon_y = y_offset + status_height // 2
-            pygame.draw.circle(surface, dark_color, (icon_x, icon_y), icon_size // 2)
-            pygame.draw.circle(surface, color, (icon_x, icon_y), icon_size // 2, 2)
-
-            # Calculate and draw progress bar
-            progress = remaining / self.config.POWERUP_DURATION
-            progress_width = int(160 * progress)  # 160 = bar width - padding
-            progress_rect = pygame.Rect(x_pos + 30, y_offset + 5,
-                                      progress_width, status_height - 10)
-            
-            # Flashing effect when about to expire
-            if remaining <= 5 * self.config.FPS:  # Last 5 seconds
-                if frame_count % 30 < 15:  # Flash every half second
-                    pygame.draw.rect(surface, (255, 0, 0), progress_rect)
-                else:
-                    pygame.draw.rect(surface, color, progress_rect)
-            else:
-                pygame.draw.rect(surface, color, progress_rect)
-
-            # Draw background for progress bar
-            pygame.draw.rect(surface, (100, 100, 100), pygame.Rect(x_pos + 30, y_offset + 5, 160, status_height - 10), 2)
-
-            # Draw label with remaining time
-            time_seconds = remaining // self.config.FPS  # Convert frames to seconds
-            time_text = f"{label} ({time_seconds}s)"
-            self.draw_text(surface, time_text,
-                          x_pos + 30, y_offset + 5,
-                          size=16, color=(255, 255, 255))
-            
-            y_offset += status_height + 5  # Space between status bars
 
 ##########################
 # MAIN GAME
