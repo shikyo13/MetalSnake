@@ -225,7 +225,7 @@ class Particle:
         self.y = float(y)
         angle = random.uniform(0, 2 * math.pi)
         speed = random.uniform(self.config.PARTICLE_SPEED * 0.5,
-                             self.config.PARTICLE_SPEED)
+                               self.config.PARTICLE_SPEED)
         self.dx = math.cos(angle) * speed
         self.dy = math.sin(angle) * speed
         self.life = self.config.PARTICLE_LIFETIME
@@ -240,9 +240,9 @@ class Particle:
         """Draw particle with size based on remaining lifetime"""
         radius = max(1, self.life // 6)
         color = (random.randint(100, 255),
-                random.randint(200, 255), 0)
+                 random.randint(200, 255), 0)
         pygame.draw.circle(surface, color,
-                         (int(self.x), int(self.y)), radius)
+                           (int(self.x), int(self.y)), radius)
 
 class ParticleSystem:
     """
@@ -425,6 +425,7 @@ class PowerUpManager:
                 powerup.apply(game)
                 self.powerups.remove(powerup)
                 game.score += 5 * game.score_multiplier  # Bonus for collecting power-up
+                # Emit particles at power-up location upon collection
                 game.particles.emit(
                     powerup.x * game.cell_size + game.cell_size // 2,
                     powerup.y * game.cell_size + game.cell_size // 2,
@@ -432,7 +433,7 @@ class PowerUpManager:
                 )
                 logging.info(f"Power-up {powerup.type.name} collected by player.")
     
-    def draw(self, surface: pygame.Surface, cell_size: int, frame_count: int) -> None:
+    def draw(self, surface: pygame.Surface, cell_size: int, frame_count: int, particle_system: ParticleSystem) -> None:
         """Draw all active power-ups with enhanced visuals and animations"""
         for powerup in self.powerups:
             center_x = powerup.x * cell_size + cell_size // 2
@@ -508,133 +509,9 @@ class PowerUpManager:
                     points.append((x, y))
                 pygame.draw.polygon(surface, color, points)
                 pygame.draw.polygon(surface, self.config.WHITE, points, 2)
-
-    ##########################
-    # GAME ENTITIES
-    ##########################
-
-class Snake:
-    """
-    Represents the snake entity with its movement logic and collision detection.
-    Handles snake movement, growth, and collision checking.
-    Implements conditional wrap-around movement based on invincibility.
-    """
-    def __init__(self, config: GameConfig):
-        self.config = config
-        self.body: List[Tuple[int, int]] = [(5, 5), (4, 5), (3, 5)]
-        self.direction = Direction.RIGHT
-        self.next_direction = Direction.RIGHT
-        self.invincible = False  # Attribute for invincibility
-
-    def set_direction(self, new_direction: Direction) -> None:
-        """Update direction ensuring no 180-degree turns"""
-        if new_direction != self.direction.opposite:
-            self.next_direction = new_direction
-                
-    def move(self, food_pos: Tuple[int, int],
-             obstacles: Set[Tuple[int, int]]) -> bool:
-        """
-        Move snake and check for collisions.
-        Returns False if move results in death.
-        Implements conditional wrap-around based on invincibility.
-        """
-        self.direction = self.next_direction
-        head_x, head_y = self.body[0]
-        
-        # Calculate new head position based on direction
-        if self.direction == Direction.UP:
-            head_y -= 1
-        elif self.direction == Direction.DOWN:
-            head_y += 1
-        elif self.direction == Direction.LEFT:
-            head_x -= 1
-        elif self.direction == Direction.RIGHT:
-            head_x += 1
-        
-        # Handle wall collision
-        if not self.invincible:
-            # If out of bounds, die
-            if head_x < 0 or head_x >= self.config.GRID_COLS or head_y < 0 or head_y >= self.config.GRID_ROWS:
-                return False
-        else:
-            # If invincible, wrap around
-            head_x %= self.config.GRID_COLS
-            head_y %= self.config.GRID_ROWS
-        
-        new_head = (head_x, head_y)
-        self.body.insert(0, new_head)
-        
-        # Check collision with self or obstacles
-        if new_head in self.body[1:] or new_head in obstacles:
-            if not self.invincible:
-                return False
-                
-        # Remove tail if no food eaten
-        if new_head != food_pos:
-            self.body.pop()
             
-        return True
-
-    def head_position(self) -> Tuple[int, int]:
-        """Returns the current head position of the snake"""
-        return self.body[0]
-    
-    def draw(self, surface: pygame.Surface, cell_size: int,
-             frame_count: int) -> None:
-        """Draw snake with animated effects"""
-        for i, (sx, sy) in enumerate(self.body):
-            center_x = sx * cell_size + cell_size // 2
-            center_y = sy * cell_size + cell_size // 2
-
-            # Calculate wave effect
-            phase = (frame_count * 0.1) + i * 0.3
-            wave = 2 * math.sin(phase)
-
-            if i == 0:  # Head
-                base_r = cell_size // 2
-                radius = max(base_r + int(wave), 2)
-                
-                # Add glow effect to head
-                glow_color = (0, 255, 0, 100) if not self.invincible else (0, 255, 255, 150)
-                pygame.draw.circle(surface, glow_color,
-                                 (center_x, center_y), radius + 4)
-                pygame.draw.circle(surface, self.config.BLACK,
-                                 (center_x, center_y), radius + 2)
-                head_color = self.config.GREEN if not self.invincible else self.config.CYAN
-                pygame.draw.circle(surface, head_color,
-                                 (center_x, center_y), radius)
-                
-                # Draw eyes with glow
-                eye_offset = radius // 2
-                eye_pos1 = (center_x - eye_offset // 2,
-                           center_y - eye_offset)
-                eye_pos2 = (center_x + eye_offset // 2,
-                           center_y - eye_offset)
-                eye_r = eye_offset // 3
-                
-                # Eye glow
-                pygame.draw.circle(surface, (*self.config.WHITE[:3], 128),
-                                 eye_pos1, eye_r + 2)
-                pygame.draw.circle(surface, (*self.config.WHITE[:3], 128),
-                                 eye_pos2, eye_r + 2)
-                
-                # Eyes
-                pygame.draw.circle(surface, self.config.WHITE,
-                                 eye_pos1, eye_r)
-                pygame.draw.circle(surface, self.config.WHITE,
-                                 eye_pos2, eye_r)
-            else:  # Body
-                base_r = max(cell_size // 2 - 2, 2)
-                radius = max(base_r + int(wave), 2)
-                pygame.draw.circle(surface, self.config.BLACK,
-                                 (center_x, center_y), radius + 2)
-                seg_color = self.config.GREEN if not self.invincible else self.config.CYAN
-                pygame.draw.circle(surface, seg_color,
-                                 (center_x, center_y), radius)
-
-##########################
-# RENDERING
-##########################
+            # Emit particles to simulate floating
+            particle_system.emit(center_x, center_y + bob, 1)  # Emit small particles continuously
 
 class Renderer:
     """
@@ -800,83 +677,10 @@ class Renderer:
                              highlight_pos, highlight_radius)
     
     def draw_powerups(self, surface: pygame.Surface, powerup_manager: 'PowerUpManager',
-                     cell_size: int, frame_count: int) -> None:
+                     cell_size: int, frame_count: int, particle_system: ParticleSystem) -> None:
         """Draw all active power-ups with enhanced visuals and animations"""
-        for powerup in powerup_manager.powerups:
-            center_x = powerup.x * cell_size + cell_size // 2
-            center_y = powerup.y * cell_size + cell_size // 2
-            base_radius = max(cell_size // 2 - 4, 2)
-            
-            # Define colors and shapes based on power-up type
-            if powerup.type == PowerUpType.SPEED_BOOST:
-                color = self.config.YELLOW
-                shape = "triangle"
-            elif powerup.type == PowerUpType.INVINCIBILITY:
-                color = self.config.CYAN
-                shape = "shield"  # Changed to 'shield' for clarity
-            elif powerup.type == PowerUpType.SCORE_MULTIPLIER:
-                color = self.config.MAGENTA
-                shape = "star"
-            else:
-                color = self.config.WHITE
-                shape = "circle"
-
-            # Calculate pulsating scale
-            pulse = (math.sin(frame_count * 0.05) + 1) / 2  # Pulsate between 0 and 1
-            scale = 0.8 + 0.4 * pulse  # Scale between 0.8 and 1.2
-            pulsate_radius = int(base_radius * scale)
-
-            # Calculate bobbing offset
-            bob = math.sin(frame_count * 0.02) * 2  # Bob up and down by 2 pixels
-
-            # Glow effect
-            glow_radius = pulsate_radius + 6
-            glow_color = (*color[:3], 100)  # Semi-transparent glow
-            pygame.draw.circle(surface, glow_color, (center_x, int(center_y + bob)), glow_radius)
-
-            # Draw distinct shape with outline
-            if shape == "circle":
-                pygame.draw.circle(surface, color, (center_x, int(center_y + bob)), pulsate_radius)
-                pygame.draw.circle(surface, self.config.WHITE, (center_x, int(center_y + bob)), pulsate_radius, 2)
-            elif shape == "square":
-                rect = pygame.Rect(
-                    center_x - pulsate_radius,
-                    int(center_y + bob) - pulsate_radius,
-                    pulsate_radius * 2,
-                    pulsate_radius * 2
-                )
-                pygame.draw.rect(surface, color, rect)
-                pygame.draw.rect(surface, self.config.WHITE, rect, 2)
-            elif shape == "triangle":
-                points = [
-                    (center_x, int(center_y + bob) - pulsate_radius),
-                    (center_x - pulsate_radius, int(center_y + bob) + pulsate_radius),
-                    (center_x + pulsate_radius, int(center_y + bob) + pulsate_radius)
-                ]
-                pygame.draw.polygon(surface, color, points)
-                pygame.draw.polygon(surface, self.config.WHITE, points, 2)
-            elif shape == "shield":
-                # Draw a simple shield shape
-                shield_points = [
-                    (center_x, int(center_y + bob) - pulsate_radius),
-                    (center_x - pulsate_radius, int(center_y + bob)),
-                    (center_x, int(center_y + bob) + pulsate_radius),
-                    (center_x + pulsate_radius, int(center_y + bob))
-                ]
-                pygame.draw.polygon(surface, color, shield_points)
-                pygame.draw.polygon(surface, self.config.WHITE, shield_points, 2)
-            elif shape == "star":
-                # Draw a 5-pointed star
-                points = []
-                for i in range(10):
-                    angle = i * (math.pi / 5) - math.pi / 2
-                    r = pulsate_radius if i % 2 == 0 else pulsate_radius // 2
-                    x = center_x + r * math.cos(angle)
-                    y = int(center_y + bob) + r * math.sin(angle)
-                    points.append((x, y))
-                pygame.draw.polygon(surface, color, points)
-                pygame.draw.polygon(surface, self.config.WHITE, points, 2)
-
+        powerup_manager.draw(surface, cell_size, frame_count, particle_system)
+    
     def draw_active_powerups(self, surface: pygame.Surface, powerup_manager: 'PowerUpManager',
                             score_multiplier: int, cell_size: int, frame_count: int, w: int, h: int) -> None:
         """Draw active power-ups with timers"""
@@ -912,13 +716,128 @@ class Renderer:
                     display_color = color
             else:
                 display_color = color
-            self.draw_text(surface, time_label, 30, y_offset, size=20, color=display_color, center=False)
+            self.draw_text(surface, time_label, 30, y_offset, size=20, color=display_color, center=False, glow=True)
             
             y_offset += 30  # Increment Y position for the next power-up
 
-##########################
-# MAIN GAME
-##########################
+class Snake:
+    """
+    Represents the snake entity with its movement logic and collision detection.
+    Handles snake movement, growth, and collision checking.
+    Implements conditional wrap-around movement based on invincibility.
+    """
+    def __init__(self, config: GameConfig):
+        self.config = config
+        self.body: List[Tuple[int, int]] = [(5, 5), (4, 5), (3, 5)]
+        self.direction = Direction.RIGHT
+        self.next_direction = Direction.RIGHT
+        self.invincible = False  # Attribute for invincibility
+
+    def set_direction(self, new_direction: Direction) -> None:
+        """Update direction ensuring no 180-degree turns"""
+        if new_direction != self.direction.opposite:
+            self.next_direction = new_direction
+                
+    def move(self, food_pos: Tuple[int, int],
+             obstacles: Set[Tuple[int, int]]) -> bool:
+        """
+        Move snake and check for collisions.
+        Returns False if move results in death.
+        Implements conditional wrap-around based on invincibility.
+        """
+        self.direction = self.next_direction
+        head_x, head_y = self.body[0]
+        
+        # Calculate new head position based on direction
+        if self.direction == Direction.UP:
+            head_y -= 1
+        elif self.direction == Direction.DOWN:
+            head_y += 1
+        elif self.direction == Direction.LEFT:
+            head_x -= 1
+        elif self.direction == Direction.RIGHT:
+            head_x += 1
+        
+        # Handle wall collision
+        if not self.invincible:
+            # If out of bounds, die
+            if head_x < 0 or head_x >= self.config.GRID_COLS or head_y < 0 or head_y >= self.config.GRID_ROWS:
+                return False
+        else:
+            # If invincible, wrap around
+            head_x %= self.config.GRID_COLS
+            head_y %= self.config.GRID_ROWS
+        
+        new_head = (head_x, head_y)
+        self.body.insert(0, new_head)
+        
+        # Check collision with self or obstacles
+        if new_head in self.body[1:] or new_head in obstacles:
+            if not self.invincible:
+                return False
+                
+        # Remove tail if no food eaten
+        if new_head != food_pos:
+            self.body.pop()
+            
+        return True
+
+    def head_position(self) -> Tuple[int, int]:
+        """Returns the current head position of the snake"""
+        return self.body[0]
+    
+    def draw(self, surface: pygame.Surface, cell_size: int,
+             frame_count: int) -> None:
+        """Draw snake with animated effects"""
+        for i, (sx, sy) in enumerate(self.body):
+            center_x = sx * cell_size + cell_size // 2
+            center_y = sy * cell_size + cell_size // 2
+
+            # Calculate wave effect
+            phase = (frame_count * 0.1) + i * 0.3
+            wave = 2 * math.sin(phase)
+
+            if i == 0:  # Head
+                base_r = cell_size // 2
+                radius = max(base_r + int(wave), 2)
+                
+                # Add glow effect to head
+                glow_color = (0, 255, 0, 100) if not self.invincible else (0, 255, 255, 150)
+                pygame.draw.circle(surface, glow_color,
+                                 (center_x, center_y), radius + 4)
+                pygame.draw.circle(surface, self.config.BLACK,
+                                 (center_x, center_y), radius + 2)
+                head_color = self.config.GREEN if not self.invincible else self.config.CYAN
+                pygame.draw.circle(surface, head_color,
+                                 (center_x, center_y), radius)
+                
+                # Draw eyes with glow
+                eye_offset = radius // 2
+                eye_pos1 = (center_x - eye_offset // 2,
+                           center_y - eye_offset)
+                eye_pos2 = (center_x + eye_offset // 2,
+                           center_y - eye_offset)
+                eye_r = eye_offset // 3
+                
+                # Eye glow
+                pygame.draw.circle(surface, (*self.config.WHITE[:3], 128),
+                                 eye_pos1, eye_r + 2)
+                pygame.draw.circle(surface, (*self.config.WHITE[:3], 128),
+                                 eye_pos2, eye_r + 2)
+                
+                # Eyes
+                pygame.draw.circle(surface, self.config.WHITE,
+                                 eye_pos1, eye_r)
+                pygame.draw.circle(surface, self.config.WHITE,
+                                 eye_pos2, eye_r)
+            else:  # Body
+                base_r = max(cell_size // 2 - 2, 2)
+                radius = max(base_r + int(wave), 2)
+                pygame.draw.circle(surface, self.config.BLACK,
+                                 (center_x, center_y), radius + 2)
+                seg_color = self.config.GREEN if not self.invincible else self.config.CYAN
+                pygame.draw.circle(surface, seg_color,
+                                 (center_x, center_y), radius)
 
 class Game:
     def __init__(self):
@@ -1122,7 +1041,7 @@ class Game:
         self.renderer.draw_obstacles(self.screen, self.obstacles, self.cell_size, self.frame_count)
         self.renderer.draw_food(self.screen, self.food_pos[0], self.food_pos[1],
                               self.cell_size, self.frame_count)
-        self.renderer.draw_powerups(self.screen, self.powerup_manager, self.cell_size, self.frame_count)
+        self.renderer.draw_powerups(self.screen, self.powerup_manager, self.cell_size, self.frame_count, self.particles)
         self.snake.draw(self.screen, self.cell_size, self.frame_count)
         self.particles.update_and_draw(self.screen)
         # Pass score_multiplier to the renderer
