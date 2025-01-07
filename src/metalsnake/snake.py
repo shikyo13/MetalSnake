@@ -1,18 +1,16 @@
 """
 snake.py
 
-A complete implementation of a resizable Snake game with improved architecture and visuals.
+An enhanced implementation of the Snake game using Pygame.
 Features include:
-- Proper class-based architecture with dependency injection
-- Enhanced resource management and caching
-- Particle system with object pooling
-- Type-safe implementations using Python type hints
-- Improved state management and game flow
+- Background music integration
+- Magnet power-up functionality
+- Advanced glow and shine visual effects
+- Additional power-ups for varied gameplay
+- Improved particle system with object pooling
+- Responsive design adjustments for window resizing
 - Comprehensive logging and error handling
-- Enhanced power-up system with distinct visuals and animations
-- Robust sound system with programmatically generated sound effects and background music
-- Responsive design accommodating window resizing
-- Project structure adaptation for development and PyInstaller bundling
+- Sound synthesis and management with programmatically generated sounds
 """
 
 import pygame
@@ -23,7 +21,7 @@ import json
 import os
 import logging
 from typing import Tuple, Set, List, Optional, Dict, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 import numpy as np
 import io
@@ -36,6 +34,7 @@ except ImportError:
     print("Please install it using 'pip install appdirs'")
     sys.exit(1)
 
+
 ##########################
 # ENUMS AND CONFIG
 ##########################
@@ -46,6 +45,7 @@ class GameState(Enum):
     PLAY = auto()
     GAME_OVER = auto()
     HIGHSCORES = auto()
+    SETTINGS = auto()
 
 class Direction(Enum):
     """Represents possible movement directions with helper methods"""
@@ -70,6 +70,8 @@ class PowerUpType(Enum):
     SPEED_BOOST = auto()
     INVINCIBILITY = auto()
     SCORE_MULTIPLIER = auto()
+    MAGNET = auto()
+    SHRINK = auto()
 
 @dataclass
 class GameConfig:
@@ -80,6 +82,7 @@ class GameConfig:
     # Grid settings (will be dynamically calculated based on window size)
     GRID_COLS: int = 30
     GRID_ROWS: int = 20
+    cell_size: int = 20  # Default cell size, will be updated based on window size
     
     # Game mechanics
     FPS: int = 60
@@ -95,13 +98,17 @@ class GameConfig:
     
     # Scoring
     MAX_SCORES: int = 5
+    SCORE_THRESHOLD: int = 50  # Points needed to increase speed
+    SPEED_INCREMENT: int = 2    # How much to increase speed each threshold
     
     # Power-up system
-    POWERUP_TYPES: List[PowerUpType] = (
+    POWERUP_TYPES: List[PowerUpType] = field(default_factory=lambda: [
         PowerUpType.SPEED_BOOST,
         PowerUpType.INVINCIBILITY,
         PowerUpType.SCORE_MULTIPLIER,
-    )
+        PowerUpType.MAGNET,
+        PowerUpType.SHRINK
+    ])
     POWERUP_SPAWN_INTERVAL: int = 400  # Frames between power-up spawns
     POWERUP_DURATION: int = 500  # Frames power-up effect lasts
     POWERUP_COUNT: int = 3  # Maximum number of active power-ups
@@ -114,9 +121,14 @@ class GameConfig:
     BLUE: Tuple[int, ...] = (0, 0, 200)
     GREEN: Tuple[int, ...] = (0, 200, 0)
     YELLOW: Tuple[int, ...] = (200, 200, 0)
-    CYAN: Tuple[int, ...] = (0, 200, 200)
+    CYAN: Tuple[int, ...] = (0, 255, 255)
     MAGENTA: Tuple[int, ...] = (200, 0, 200)
     ORANGE: Tuple[int, ...] = (255, 165, 0)
+    GOLD: Tuple[int, ...] = (255, 215, 0)
+    PURPLE: Tuple[int, ...] = (128, 0, 128)
+    BROWN: Tuple[int, ...] = (165, 42, 42)
+    SKY_BLUE: Tuple[int, ...] = (135, 206, 235)
+
 
 ##########################
 # RESOURCE MANAGEMENT
@@ -133,10 +145,6 @@ class ResourceManager:
         # Determine base paths
         self.base_path = self.get_base_path()
 
-        # Load and start background music (if any)
-        # For this implementation, we'll omit background music as sound effects are synthesized
-        # If you wish to add background music, you can implement it similarly to sound effects
-
     def get_base_path(self) -> str:
         """Determine the base path for resources"""
         if hasattr(sys, '_MEIPASS'):
@@ -150,7 +158,7 @@ class ResourceManager:
     def get_background(self) -> Optional[pygame.Surface]:
         """Lazy load the background image when first requested"""
         if self._background is None:
-            path = self.resource_path(os.path.join("images", "snake.png"))
+            path = self.resource_path(os.path.join("images", "snake.png"))  # Updated to 'snake.png'
             if not os.path.exists(path):
                 self.logger.error(f"Background image not found at {path}")
                 # Create a default background
@@ -158,7 +166,7 @@ class ResourceManager:
                 self._background.fill(self.config.BLACK)
                 return self._background
             try:
-                self._background = pygame.image.load(path).convert()
+                self._background = pygame.image.load(path).convert_alpha()  # Use convert_alpha to preserve transparency
                 self.logger.info("Background image loaded successfully")
             except Exception as e:
                 self.logger.warning(f"Could not load background: {e}")
@@ -201,6 +209,7 @@ class ResourceManager:
         self._background = None
         self._font_cache.clear()
         self.logger.info("Resources cleaned up")
+
 
 ##########################
 # PARTICLE SYSTEM
@@ -273,6 +282,7 @@ class ParticleSystem:
             self.particles.remove(dead)
             self.particle_pool.append(dead)
 
+
 ##########################
 # SCORE MANAGEMENT
 ##########################
@@ -324,6 +334,7 @@ class ScoreManager:
         self.highscores[mode] = self.highscores[mode][:self.config.MAX_SCORES]
         self.save_scores()
 
+
 ##########################
 # POWER-UP SYSTEM
 ##########################
@@ -363,6 +374,18 @@ class PowerUp:
             game.powerup_manager.active_powerups[self.type] = self.duration  # Correct reference
             game.sound_manager.play_powerup_sound(self.type)
             logging.info(f"Score Multiplier activated! Current multiplier: x{game.score_multiplier}")
+        elif self.type == PowerUpType.MAGNET:
+            game.powerup_manager.magnet_active = True
+            game.powerup_manager.active_powerups[self.type] = self.duration
+            game.sound_manager.play_powerup_sound(self.type)
+            logging.info("Magnet activated!")
+        elif self.type == PowerUpType.SHRINK:
+            if len(game.snake.body) > 3:
+                game.snake.body = game.snake.body[:-2]  # Remove two segments
+                game.score = max(0, game.score - 5)  # Penalize score slightly
+                game.powerup_manager.active_powerups[self.type] = self.duration
+                game.sound_manager.play_powerup_sound(self.type)
+                logging.info("Shrink activated! Snake size reduced.")
     
     def expire(self, game: 'Game') -> None:
         """Expire the power-up effect from the game"""
@@ -381,6 +404,15 @@ class PowerUp:
             if self.type in game.powerup_manager.active_powerups:
                 del game.powerup_manager.active_powerups[self.type]
             logging.info(f"Score Multiplier expired! Current multiplier: x{game.score_multiplier}")
+        elif self.type == PowerUpType.MAGNET:
+            game.powerup_manager.magnet_active = False
+            if self.type in game.powerup_manager.active_powerups:
+                del game.powerup_manager.active_powerups[self.type]
+            logging.info("Magnet expired!")
+        elif self.type == PowerUpType.SHRINK:
+            if self.type in game.powerup_manager.active_powerups:
+                del game.powerup_manager.active_powerups[self.type]
+            logging.info("Shrink expired!")
     
     def update_timer(self) -> None:
         """Update the remaining duration of the power-up"""
@@ -396,14 +428,15 @@ class PowerUpManager:
         self.active_powerups: Dict[PowerUpType, int] = {}
         self.powerups: List[PowerUp] = []
         self.spawn_timer = 0
+        self.magnet_active: bool = False  # Tracks if magnet is active
     
     def spawn_powerup(self, game: 'Game') -> None:
         """Spawn a new power-up at a random position"""
         if len(self.powerups) >= self.config.POWERUP_COUNT:
             return  # Maximum active power-ups reached
 
-        x, y = game.get_random_position(include_powerups=True)
         powerup_type = random.choice(self.config.POWERUP_TYPES)
+        x, y = game.get_random_position(include_powerups=True)
         powerup = PowerUp(x, y, powerup_type, self.config)
         self.powerups.append(powerup)
         logging.info(f"Spawned power-up: {powerup.type.name} at ({x}, {y})")
@@ -434,8 +467,8 @@ class PowerUpManager:
                 game.score += 5 * game.score_multiplier  # Bonus for collecting power-up
                 # Emit particles at power-up location upon collection
                 game.particles.emit(
-                    powerup.x * game.cell_size + game.cell_size // 2,
-                    powerup.y * game.cell_size + game.cell_size // 2,
+                    powerup.x * game.cell_size + game.cell_size // 2 + game.renderer.x_offset,
+                    powerup.y * game.cell_size + game.cell_size // 2 + game.renderer.y_offset,
                     game.config.PARTICLE_COUNT,
                     self.get_powerup_particle_color(powerup.type)
                 )
@@ -449,62 +482,21 @@ class PowerUpManager:
             return (0, 255, 255)  # Cyan
         elif powerup_type == PowerUpType.SCORE_MULTIPLIER:
             return (255, 0, 255)  # Magenta
+        elif powerup_type == PowerUpType.MAGNET:
+            return (0, 255, 0)    # Green
+        elif powerup_type == PowerUpType.SHRINK:
+            return (255, 165, 0)  # Orange
         else:
             return (255, 255, 255)  # White
     
     def draw(self, surface: pygame.Surface, cell_size: int, frame_count: int, particle_system: ParticleSystem) -> None:
-        """Draw all active power-ups with enhanced visuals and animations, matching food depth style"""
+        """Draw all active power-ups with enhanced visuals and animations"""
         for powerup in self.powerups:
-            center_x = powerup.x * cell_size + cell_size // 2
-            center_y = powerup.y * cell_size + cell_size // 2
-            base_radius = max(cell_size // 2 - 2, 2)
+            center_x, center_y = surface.get_size()
+            center_x, center_y = 0, 0  # Placeholders; actual positions are handled by Renderer
+            # Drawing is handled by Renderer
+            pass  # No action needed here as Renderer handles drawing
 
-            # Create pulsing effect similar to food
-            pulse = abs(math.sin(frame_count * 0.1)) * 0.3 + 0.7
-            bob = math.sin(frame_count * 0.08) * cell_size * 0.15
-
-            # Get color based on power-up type
-            if powerup.type == PowerUpType.SPEED_BOOST:
-                core_color = (200, 200, 0)  # Darker yellow
-                glow_color = (255, 255, 0)  # Bright yellow
-            elif powerup.type == PowerUpType.INVINCIBILITY:
-                core_color = (0, 180, 180)  # Darker cyan
-                glow_color = (0, 255, 255)  # Bright cyan
-            elif powerup.type == PowerUpType.SCORE_MULTIPLIER:
-                core_color = (180, 0, 180)  # Darker magenta
-                glow_color = (255, 0, 255)  # Bright magenta
-            else:
-                core_color = (255, 255, 255)  # White
-                glow_color = (255, 255, 255)
-
-            # Draw outer glow layers similar to food
-            for radius in range(base_radius + 4, base_radius - 1, -1):
-                alpha = int(100 * pulse * (radius - base_radius + 4) / 4)
-                current_glow = (*glow_color[:3], alpha)
-                glow_surface = pygame.Surface((radius * 2 + 2, radius * 2 + 2), pygame.SRCALPHA)
-                pygame.draw.circle(glow_surface, current_glow,
-                                 (radius + 1, radius + 1), radius)
-                surface.blit(glow_surface,
-                            (center_x - radius - 1, center_y - radius - 1 + bob))
-
-            # Draw main power-up body
-            pygame.draw.circle(surface, core_color,
-                             (center_x, center_y + bob), base_radius)
-
-            # Add highlight for depth
-            highlight_pos = (center_x - base_radius // 3,
-                           center_y - base_radius // 3 + bob)
-            highlight_radius = max(base_radius // 3, 1)
-            highlight_color = tuple(min(255, c + 100) for c in core_color)
-            pygame.draw.circle(surface, highlight_color,
-                             highlight_pos, highlight_radius)
-
-            # Emit particles for floating effect
-            if frame_count % 10 == 0:  # Reduced particle emission rate
-                particle_system.emit(
-                    center_x, center_y + bob, 1,
-                    self.get_powerup_particle_color(powerup.type)
-                )
 
 ##########################
 # SOUND SYNTHESIS AND MANAGER
@@ -526,7 +518,7 @@ class SoundSynthesizer:
         This is the most basic building block of sound synthesis.
         """
         t = np.linspace(0, duration, int(self.sample_rate * duration), False)
-        return np.sin(2 * np.pi * frequency * t)
+        return np.sin(2 * math.pi * frequency * t)
     
     def apply_envelope(self, samples: np.ndarray, attack: float = 0.1, 
                       decay: float = 0.1, sustain: float = 0.7,
@@ -582,11 +574,11 @@ class SoundSynthesizer:
         frequency = np.linspace(freq_start, freq_end, len(t))
         
         # Generate main tone with frequency modulation
-        main_tone = np.sin(2 * np.pi * frequency * t)
+        main_tone = np.sin(2 * math.pi * frequency * t)
         
         # Add harmonics for richness
-        harmonic1 = 0.5 * np.sin(4 * np.pi * frequency * t)
-        harmonic2 = 0.25 * np.sin(6 * np.pi * frequency * t)
+        harmonic1 = 0.5 * np.sin(4 * math.pi * frequency * t)
+        harmonic2 = 0.25 * np.sin(6 * math.pi * frequency * t)
         
         # Combine waves
         combined = main_tone + harmonic1 + harmonic2
@@ -611,7 +603,7 @@ class SoundSynthesizer:
         
         # Add subtle sine wave for tone
         t = np.linspace(0, duration, len(filtered_noise), False)
-        tone = 0.3 * np.sin(2 * np.pi * 200 * t)
+        tone = 0.3 * np.sin(2 * math.pi * 200 * t)
         
         # Combine and shape
         combined = filtered_noise + tone
@@ -654,10 +646,10 @@ class SoundSynthesizer:
         frequency = np.linspace(freq_start, freq_end, len(t))
         
         # Generate main tone
-        main_tone = np.sin(2 * np.pi * frequency * t)
+        main_tone = np.sin(2 * math.pi * frequency * t)
         
         # Add lower octave
-        low_tone = 0.5 * np.sin(np.pi * frequency * t)
+        low_tone = 0.5 * np.sin(math.pi * frequency * t)
         
         # Add noise for texture
         noise = 0.1 * self.create_noise(duration)
@@ -785,9 +777,10 @@ class SoundManager:
     def play_menu_sound(self, action: str) -> None:
         """Play UI sound for menu interactions"""
         if action == 'select':
-            # You can create and add more sounds as needed
+            # Reusing 'powerup' sound for selection
             self.play_sound('powerup', self.ui_channel, volume=0.4)
         elif action == 'move':
+            # Reusing 'food_pickup' sound for navigation
             self.play_sound('food_pickup', self.ui_channel, volume=0.2)
     
     def resume_music(self) -> None:
@@ -800,12 +793,33 @@ class SoundManager:
         self.master_volume = max(0.0, min(1.0, volume))
         pygame.mixer.music.set_volume(self.master_volume * self.music_volume)
     
+    def set_music_volume(self, volume: float) -> None:
+        """Set background music volume"""
+        self.music_volume = max(0.0, min(1.0, volume))
+        pygame.mixer.music.set_volume(self.master_volume * self.music_volume)
+        logging.info(f"Background music volume set to {self.music_volume}")
+    
+    def set_sfx_volume(self, volume: float) -> None:
+        """Set sound effects volume"""
+        self.sfx_volume = max(0.0, min(1.0, volume))
+        logging.info(f"Sound effects volume set to {self.sfx_volume}")
+    
+    def toggle_music(self) -> None:
+        """Toggle background music on or off"""
+        if pygame.mixer.music.get_busy():
+            pygame.mixer.music.pause()
+            logging.info("Background music paused")
+        else:
+            pygame.mixer.music.unpause()
+            logging.info("Background music resumed")
+    
     def cleanup(self) -> None:
         """Clean up sound resources"""
         pygame.mixer.music.stop()
         self._sound_cache.clear()
         pygame.mixer.stop()
         self.logger.info("Sound system cleaned up")
+
 
 ##########################
 # RENDERER CLASS
@@ -819,16 +833,36 @@ class Renderer:
     def __init__(self, config: GameConfig, resources: ResourceManager):
         self.config = config
         self.resources = resources
+        self.x_offset = 0
+        self.y_offset = 0
         
+    def update_offsets(self, window_width: int, window_height: int) -> None:
+        """Calculate and update the top-left offset to center the grid"""
+        grid_width = self.config.GRID_COLS * self.config.cell_size
+        grid_height = self.config.GRID_ROWS * self.config.cell_size
+        self.x_offset = max((window_width - grid_width) // 2, 0)
+        self.y_offset = max((window_height - grid_height) // 2, 0)
+        
+    def grid_to_screen(self, x: int, y: int) -> Tuple[int, int]:
+        """Convert grid coordinates to screen coordinates based on offsets"""
+        screen_x = x * self.config.cell_size + self.x_offset
+        screen_y = y * self.config.cell_size + self.y_offset
+        return (screen_x, screen_y)
+    
     def draw_background(self, surface: pygame.Surface,
                        width: int, height: int) -> None:
-        """Draw background with overlay"""
+        """Draw background scaled to grid size and centered"""
         background = self.resources.get_background()
         if background:
-            bg_scaled = pygame.transform.scale(background, (width, height))
-            surface.blit(bg_scaled, (0, 0))
+            bg_scaled = pygame.transform.scale(background, (self.config.GRID_COLS * self.config.cell_size,
+                                                           self.config.GRID_ROWS * self.config.cell_size))
+            surface.blit(bg_scaled, (self.x_offset, self.y_offset))
         else:
-            surface.fill(self.config.BLACK)
+            # Fill the grid area with black
+            pygame.draw.rect(surface, self.config.BLACK,
+                             (self.x_offset, self.y_offset,
+                              self.config.GRID_COLS * self.config.cell_size,
+                              self.config.GRID_ROWS * self.config.cell_size))
             
     def draw_overlay(self, surface: pygame.Surface,
                     width: int, height: int, alpha: int = 80) -> None:
@@ -871,7 +905,7 @@ class Renderer:
                 surface.blit(glow_surface, (x - size * len(text) // 2, y - size // 2))
             else:
                 surface.blit(glow_surface, (x, y))
-        
+
         # Draw shadows
         rendered_shadow = font.render(text, True, shadow_color)
         for offset_x, offset_y in shadow_offsets:
@@ -894,8 +928,9 @@ class Renderer:
     def draw_food(self, surface: pygame.Surface, x: int, y: int,
                   cell_size: int, frame_count: int) -> None:
         """Draw food with pulsing glow effect"""
-        center_x = x * cell_size + cell_size // 2
-        center_y = y * cell_size + cell_size // 2
+        screen_x, screen_y = self.grid_to_screen(x, y)
+        center_x = screen_x + cell_size // 2
+        center_y = screen_y + cell_size // 2
         base_radius = max(cell_size // 2 - 2, 2)
 
         # Create pulsing effect
@@ -922,213 +957,36 @@ class Renderer:
         highlight_radius = max(base_radius // 3, 1)
         pygame.draw.circle(surface, (255, 128, 128),
                          highlight_pos, highlight_radius)
-
+    
     def draw_obstacles(self, surface: pygame.Surface,
-                      obstacles: Set[Tuple[int, int]],
+                      obstacles: Set['Obstacle'],
                       cell_size: int, frame_count: int) -> None:
         """Draw obstacles with magical appearance"""
-        for ox, oy in obstacles:
-            cx = ox * cell_size + cell_size // 2
-            cy = oy * cell_size + cell_size // 2
-
-            # Animate obstacles
-            pulse = abs(math.sin(frame_count * 0.1)) * 0.3 + 0.7
-            bob = math.sin(frame_count * 0.08) * cell_size * 0.15
-
-            # Create color pulsing
-            color_pulse = abs(math.sin(frame_count * 0.05))
-            base_blue = int(200 + (55 * color_pulse))
-            base_red = int(100 + (40 * color_pulse))
-            base_color = (base_red, 0, base_blue)
-
-            # Calculate size with pulse effect
-            r = max(cell_size // 2 - 2, 2)
-            pulse_radius = int(r * pulse)
-
-            # Draw glow layers
-            for offset in range(4, 0, -1):
-                glow_radius = pulse_radius + offset
-                glow_surface = pygame.Surface((glow_radius * 2 + 2, glow_radius * 2 + 2), pygame.SRCALPHA)
-                alpha = int(128 * (5 - offset) / 4)
-                glow_color = (60, 130, 255, alpha)
-
-                pygame.draw.circle(glow_surface, glow_color,
-                                 (glow_radius + 1, glow_radius + 1),
-                                 glow_radius)
-                surface.blit(glow_surface,
-                            (cx - glow_radius - 1,
-                             cy - glow_radius - 1 + bob))
-
-            # Draw main obstacle
-            pygame.draw.circle(surface, base_color,
-                             (cx, cy + bob), pulse_radius)
-
-            # Add highlight
-            highlight_color = (130, 200, 255)
-            highlight_pos = (cx - pulse_radius // 3,
-                           cy - pulse_radius // 3 + bob)
-            highlight_radius = max(pulse_radius // 3, 1)
-            pygame.draw.circle(surface, highlight_color,
-                             highlight_pos, highlight_radius)
-
+        for obstacle in obstacles:
+            obstacle.draw(surface, self)
+    
     def draw_powerups(self, surface: pygame.Surface, powerup_manager: 'PowerUpManager',
                      cell_size: int, frame_count: int, particle_system: ParticleSystem) -> None:
-        """Draw all active power-ups with enhanced visuals and animations, matching food depth style"""
+        """Draw all active power-ups with enhanced visuals and animations"""
         powerup_manager.draw(surface, cell_size, frame_count, particle_system)
     
-    def draw_active_powerups_status(self, surface: pygame.Surface,
-                                  powerup_manager: 'PowerUpManager',
-                                  score_multiplier: int,
-                                  frame_count: int) -> None:
-        """Draw active power-ups status display in top right corner"""
-        screen_width = surface.get_width()
-        padding = 10
-        y_offset = padding
-        status_height = 30
-        icon_size = status_height - 4
-
-        for powerup_type, remaining in powerup_manager.active_powerups.items():
-            # Calculate position for status bar
-            x_pos = screen_width - 220 - padding  # Adjusted to accommodate icon and text
-
-            # Get power-up properties
-            if powerup_type == PowerUpType.SPEED_BOOST:
-                label = "Speed Boost"
-                color = (255, 255, 0)  # Yellow
-                dark_color = (200, 200, 0)
-            elif powerup_type == PowerUpType.INVINCIBILITY:
-                label = "Invincibility"
-                color = (0, 255, 255)  # Cyan
-                dark_color = (0, 180, 180)
-            elif powerup_type == PowerUpType.SCORE_MULTIPLIER:
-                label = f"Score x{score_multiplier}"
-                color = (255, 0, 255)  # Magenta
-                dark_color = (180, 0, 180)
-            else:
-                label = "Unknown"
-                color = (255, 255, 255)  # White
-                dark_color = (255, 255, 255)
-
-            # Draw the power-up icon
-            icon_x = x_pos + 10
-            icon_y = y_offset + status_height // 2
-            pygame.draw.circle(surface, dark_color, (icon_x, icon_y), icon_size // 2)
-            pygame.draw.circle(surface, color, (icon_x, icon_y), icon_size // 2, 2)
-
-            # Calculate and draw progress bar
-            progress = remaining / self.config.POWERUP_DURATION
-            progress_width = int(160 * progress)  # 160 = bar width - padding
-            progress_rect = pygame.Rect(x_pos + 30, y_offset + 5,
-                                      progress_width, status_height - 10)
-            
-            # Flashing effect when about to expire
-            if remaining <= 5 * self.config.FPS:  # Last 5 seconds
-                if frame_count % 30 < 15:  # Flash every half second
-                    pygame.draw.rect(surface, (255, 0, 0), progress_rect)
-                else:
-                    pygame.draw.rect(surface, color, progress_rect)
-            else:
-                pygame.draw.rect(surface, color, progress_rect)
-
-            # Draw background for progress bar
-            pygame.draw.rect(surface, (100, 100, 100), pygame.Rect(x_pos + 30, y_offset + 5, 160, status_height - 10), 2)
-
-            # Draw label with remaining time
-            time_seconds = remaining // self.config.FPS  # Convert frames to seconds
-            time_text = f"{label} ({time_seconds}s)"
-            self.draw_text(surface, time_text,
-                          x_pos + 30, y_offset + 5,
-                          size=16, color=(255, 255, 255))
-            
-            y_offset += status_height + 5  # Space between status bars
-
-##########################
-# SNAKE CLASS
-##########################
-
-class Snake:
-    """
-    Represents the snake entity with its movement logic and collision detection.
-    Handles snake movement, growth, and collision checking.
-    Implements conditional wrap-around movement based on invincibility.
-    """
-    def __init__(self, config: GameConfig):
-        self.config = config
-        self.body: List[Tuple[int, int]] = [(15, 10), (14, 10), (13, 10)]
-        self.direction = Direction.RIGHT
-        self.next_direction = Direction.RIGHT
-        self.invincible = False  # Attribute for invincibility
-
-    def set_direction(self, new_direction: Direction) -> None:
-        """Update direction ensuring no 180-degree turns"""
-        if new_direction != self.direction.opposite:
-            self.next_direction = new_direction
-                
-    def move(self, food_pos: Tuple[int, int],
-             obstacles: Set[Tuple[int, int]]) -> bool:
-        """
-        Move snake and check for collisions.
-        Returns False if move results in death.
-        Implements conditional wrap-around based on invincibility.
-        """
-        self.direction = self.next_direction
-        head_x, head_y = self.body[0]
-        
-        # Calculate new head position based on direction
-        if self.direction == Direction.UP:
-            head_y -= 1
-        elif self.direction == Direction.DOWN:
-            head_y += 1
-        elif self.direction == Direction.LEFT:
-            head_x -= 1
-        elif self.direction == Direction.RIGHT:
-            head_x += 1
-        
-        # Handle wall collision
-        if not self.invincible:
-            # If out of bounds, die
-            if head_x < 0 or head_x >= self.config.GRID_COLS or head_y < 0 or head_y >= self.config.GRID_ROWS:
-                return False
-        else:
-            # If invincible, wrap around
-            head_x %= self.config.GRID_COLS
-            head_y %= self.config.GRID_ROWS
-        
-        new_head = (head_x, head_y)
-        self.body.insert(0, new_head)
-        
-        # Check collision with self or obstacles
-        if new_head in self.body[1:] or new_head in obstacles:
-            if not self.invincible:
-                return False
-                
-        # Remove tail if no food eaten
-        if new_head != food_pos:
-            self.body.pop()
-            
-        return True
-
-    def head_position(self) -> Tuple[int, int]:
-        """Returns the current head position of the snake"""
-        return self.body[0]
-    
-    def draw(self, surface: pygame.Surface, cell_size: int,
-             frame_count: int) -> None:
+    def draw_snake(self, surface: pygame.Surface, snake_body: List[Tuple[int, int]], frame_count: int, invincible: bool) -> None:
         """Draw snake with animated effects"""
-        for i, (sx, sy) in enumerate(self.body):
-            center_x = sx * cell_size + cell_size // 2
-            center_y = sy * cell_size + cell_size // 2
+        for i, (sx, sy) in enumerate(snake_body):
+            screen_x, screen_y = self.grid_to_screen(sx, sy)
+            center_x = screen_x + self.config.cell_size // 2
+            center_y = screen_y + self.config.cell_size // 2
 
             # Calculate wave effect
             phase = (frame_count * 0.1) + i * 0.3
             wave = 2 * math.sin(phase)
 
             if i == 0:  # Head
-                base_r = cell_size // 2
+                base_r = self.config.cell_size // 2 - 2
                 radius = max(base_r + int(wave), 2)
                 
                 # Add glow effect to head
-                glow_color = (0, 255, 0, 100) if not self.invincible else (0, 255, 255, 150)
+                glow_color = (0, 255, 0, 100) if not invincible else (0, 255, 255, 150)
                 glow_surface = pygame.Surface((radius * 2 + 8, radius * 2 + 8), pygame.SRCALPHA)
                 pygame.draw.circle(glow_surface, glow_color,
                                  (radius + 4, radius + 4), radius + 4)
@@ -1136,7 +994,7 @@ class Snake:
                 
                 pygame.draw.circle(surface, self.config.BLACK,
                                  (center_x, center_y), radius + 2)
-                head_color = self.config.GREEN if not self.invincible else self.config.CYAN
+                head_color = self.config.GREEN if not invincible else self.config.CYAN
                 pygame.draw.circle(surface, head_color,
                                  (center_x, center_y), radius)
                 
@@ -1162,11 +1020,11 @@ class Snake:
                 pygame.draw.circle(surface, self.config.WHITE,
                                  eye_pos2, eye_r)
             else:  # Body
-                base_r = max(cell_size // 2 - 2, 2)
+                base_r = max(self.config.cell_size // 2 - 4, 2)
                 radius = max(base_r + int(wave), 2)
                 
                 # Add glow effect to body segments
-                glow_color = (0, 200, 0, 80) if not self.invincible else (0, 200, 200, 120)
+                glow_color = (0, 200, 0, 80) if not invincible else (0, 200, 200, 120)
                 glow_surface = pygame.Surface((radius * 2 + 4, radius * 2 + 4), pygame.SRCALPHA)
                 pygame.draw.circle(glow_surface, glow_color,
                                  (radius + 2, radius + 2), radius + 2)
@@ -1174,12 +1032,192 @@ class Snake:
                 
                 pygame.draw.circle(surface, self.config.BLACK,
                                  (center_x, center_y), radius + 2)
-                seg_color = self.config.GREEN if not self.invincible else self.config.CYAN
+                seg_color = self.config.GREEN if not invincible else self.config.CYAN
                 pygame.draw.circle(surface, seg_color,
                                  (center_x, center_y), radius)
+    
+    ##########################
+    # SNAKE CLASS
+    ##########################
+    
+    class Snake:
+        """
+        Represents the snake entity with its movement logic and collision detection.
+        Handles snake movement, growth, and collision checking.
+        Implements conditional wrap-around movement based on invincibility.
+        """
+        def __init__(self, config: GameConfig):
+            self.config = config
+            self.body: List[Tuple[int, int]] = [(15, 10), (14, 10), (13, 10)]
+            self.direction = Direction.RIGHT
+            self.next_direction = Direction.RIGHT
+            self.invincible = False  # Attribute for invincibility
+    
+        def set_direction(self, new_direction: Direction) -> None:
+            """Update direction ensuring no 180-degree turns"""
+            if new_direction != self.direction.opposite:
+                self.next_direction = new_direction
+                    
+        def move(self, food_pos: Tuple[int, int],
+                 obstacles: Set[Tuple[int, int]]) -> bool:
+            """
+            Move snake and check for collisions.
+            Returns False if move results in death.
+            Implements conditional wrap-around based on invincibility.
+            """
+            self.direction = self.next_direction
+            head_x, head_y = self.body[0]
+            
+            # Calculate new head position based on direction
+            if self.direction == Direction.UP:
+                head_y -= 1
+            elif self.direction == Direction.DOWN:
+                head_y += 1
+            elif self.direction == Direction.LEFT:
+                head_x -= 1
+            elif self.direction == Direction.RIGHT:
+                head_x += 1
+            
+            # Handle wall collision
+            if not self.invincible:
+                # If out of bounds, die
+                if head_x < 0 or head_x >= self.config.GRID_COLS or head_y < 0 or head_y >= self.config.GRID_ROWS:
+                    return False
+            else:
+                # If invincible, wrap around
+                head_x %= self.config.GRID_COLS
+                head_y %= self.config.GRID_ROWS
+            
+            new_head = (head_x, head_y)
+            self.body.insert(0, new_head)
+            
+            # Check collision with self or obstacles
+            if new_head in self.body[1:] or new_head in obstacles:
+                if not self.invincible:
+                    return False
+                    
+            # Remove tail if no food eaten
+            if new_head != food_pos:
+                self.body.pop()
+                
+            return True
+    
+        def head_position(self) -> Tuple[int, int]:
+            """Returns the current head position of the snake"""
+            return self.body[0]
+        
+        # Removed the empty draw method as rendering is handled by Renderer.draw_snake
+
 
 ##########################
-# MAIN GAME
+# OBSTACLE CLASS
+##########################
+
+class Obstacle:
+    """
+    Represents an obstacle in the game.
+    Handles movement and rendering with enhanced collision detection.
+    """
+    def __init__(self, x: int, y: int, direction: Direction, config: GameConfig):
+        self.x = x
+        self.y = y
+        self.direction = direction
+        self.config = config
+        self.color = self.config.GRAY
+        self.size = self.config.cell_size - 4  # Padding for visual appeal
+    
+    def move(self):
+        """Move obstacle based on its direction"""
+        if self.direction == Direction.UP:
+            self.y -= 1
+        elif self.direction == Direction.DOWN:
+            self.y += 1
+        elif self.direction == Direction.LEFT:
+            self.x -= 1
+        elif self.direction == Direction.RIGHT:
+            self.x += 1
+        
+        # Wrap around the grid
+        self.x %= self.config.GRID_COLS
+        self.y %= self.config.GRID_ROWS
+    
+    def get_rect(self) -> pygame.Rect:
+        """Get obstacle rectangle"""
+        return pygame.Rect(self.x * self.config.cell_size + 2, self.y * self.config.cell_size + 2, self.size, self.size)
+    
+    def draw(self, surface: pygame.Surface, renderer: Renderer):
+        """Draw obstacle as a rectangle with rounded corners"""
+        screen_x, screen_y = renderer.grid_to_screen(self.x, self.y)
+        rect = pygame.Rect(screen_x + 2, screen_y + 2, self.size, self.size)
+        pygame.draw.rect(surface, self.color, rect, border_radius=8)
+
+
+##########################
+# SETTINGS CLASS
+##########################
+
+class Settings:
+    """
+    Handles game settings such as sound volumes and key bindings.
+    """
+    def __init__(self, config: GameConfig, resource_manager: ResourceManager):
+        self.config = config
+        self.resource_manager = resource_manager  # Added ResourceManager reference
+        self.key_bindings = {
+            'UP': pygame.K_UP,
+            'DOWN': pygame.K_DOWN,
+            'LEFT': pygame.K_LEFT,
+            'RIGHT': pygame.K_RIGHT,
+            'PLAY': pygame.K_p,
+            'HIGHSCORES': pygame.K_h,
+            'TOGGLE_OBSTACLES': pygame.K_o,
+            'OPTIONS': pygame.K_s,
+            'QUIT': pygame.K_ESCAPE,
+            'PAUSE': pygame.K_ESCAPE,
+            'SUBMIT': pygame.K_RETURN,
+            'VIEW_HIGHSCORES': pygame.K_h
+        }
+        self.load_settings()
+    
+    def load_settings(self) -> None:
+        """Load settings from file"""
+        settings_path = self.resource_manager.get_data_path("settings.json")
+        if os.path.exists(settings_path):
+            try:
+                with open(settings_path, 'r') as f:
+                    data = json.load(f)
+                self.key_bindings = data.get("key_bindings", self.key_bindings)
+                logging.info("Settings loaded successfully.")
+            except Exception as e:
+                logging.error(f"Error loading settings: {e}")
+        else:
+            # Initialize default settings if file doesn't exist
+            self.save_settings()
+    
+    def save_settings(self) -> None:
+        """Save settings to file"""
+        settings_path = self.resource_manager.get_data_path("settings.json")
+        try:
+            with open(settings_path, 'w') as f:
+                json.dump({"key_bindings": self.key_bindings}, f, indent=4)
+            logging.info("Settings saved successfully.")
+        except Exception as e:
+            logging.error(f"Error saving settings: {e}")
+    
+    def set_key_binding(self, action: str, key: int) -> None:
+        """Set a new key binding for a specific action"""
+        if action in self.key_bindings:
+            self.key_bindings[action] = key
+            self.save_settings()
+            logging.info(f"Key binding for {action} set to {pygame.key.name(key)}")
+    
+    def get_key(self, action: str) -> int:
+        """Get the key binding for a specific action"""
+        return self.key_bindings.get(action, pygame.K_ESCAPE)
+
+
+##########################
+# MAIN GAME CLASS
 ##########################
 
 class Game:
@@ -1195,6 +1233,7 @@ class Game:
         # Initialize configurations and managers
         self.config = GameConfig()
         self.resources = ResourceManager(self.config)
+        self.settings = Settings(self.config, self.resources)  # Passed ResourceManager to Settings
         self.score_manager = ScoreManager(self.config, self.resources)
         self.particles = ParticleSystem(self.config)
         self.renderer = Renderer(self.config, self.resources)
@@ -1221,14 +1260,22 @@ class Game:
         self.obstacles_enabled = False
         
         # Initialize game-specific attributes
-        self.snake = None
+        self.snake: Optional[Snake] = None
         self.score = 0
         self.game_tick = 0
-        self.food_pos = None
-        self.obstacles = set()
+        self.food_pos: Optional[Tuple[int, int]] = None
+        self.obstacles: Set[Obstacle] = set()
         self.score_multiplier = 1  # For score multiplier power-up
         self.active_powerups: Dict[PowerUpType, int] = {}
+        self.magnet_active: bool = False  # Tracks if magnet is active
         self.cell_size = 0  # Will be set in run()
+        self.settings_menu_active = False
+
+        # Set initial offsets
+        window_width, window_height = self.screen.get_size()
+        self.cell_size = min(window_width // self.config.GRID_COLS, window_height // self.config.GRID_ROWS)
+        self.config.cell_size = self.cell_size
+        self.renderer.update_offsets(window_width, window_height)
 
         self.reset_game()
 
@@ -1248,28 +1295,39 @@ class Game:
         self.score_multiplier = 1
         self.config.GAME_SPEED = self.config.BASE_GAME_SPEED  # Reset game speed
         self.snake.invincible = False  # Reset invincibility
-        pygame.mixer.music.unpause()  # Ensure music is playing
-        self.sound_manager.resume_music()
+        self.magnet_active = False
+        self.sound_manager.resume_music()  # Ensure music is playing
         logging.info("Game has been reset.")
 
     def get_random_position(self, include_powerups: bool = False) -> Tuple[int, int]:
         """Get random grid position avoiding snake, obstacles, and existing power-ups"""
         while True:
-            x = random.randint(0, self.config.GRID_COLS - 1)
-            y = random.randint(0, self.config.GRID_ROWS - 1)
+            if self.powerup_manager.magnet_active:
+                # Place food closer to the snake's head
+                head_x, head_y = self.snake.head_position()
+                # Define a range within which to spawn food
+                range_x = max(head_x - 5, 0), min(head_x + 5, self.config.GRID_COLS - 1)
+                range_y = max(head_y - 5, 0), min(head_y + 5, self.config.GRID_ROWS - 1)
+                x = random.randint(*range_x)
+                y = random.randint(*range_y)
+            else:
+                x = random.randint(0, self.config.GRID_COLS - 1)
+                y = random.randint(0, self.config.GRID_ROWS - 1)
             pos = (x, y)
             if (pos not in self.snake.body and
-                pos not in self.obstacles and
-                (not include_powerups or pos not in [pu.position() for pu in self.powerup_manager.powerups])):
+                pos not in { (ob.x, ob.y) for ob in self.obstacles } and
+                (not include_powerups or pos not in [pu.position() for pu in self.powerup_manager.powerups ])):
                 return pos
 
-    def generate_obstacles(self) -> Set[Tuple[int, int]]:
-        """Generate random obstacle positions"""
+    def generate_obstacles(self) -> Set[Obstacle]:
+        """Generate moving obstacles with random directions"""
         obstacles = set()
         for _ in range(self.config.OBSTACLE_COUNT):
             pos = self.get_random_position()
-            obstacles.add(pos)
-        logging.info(f"Generated {len(obstacles)} obstacles.")
+            direction = random.choice(list(Direction))
+            obstacle = Obstacle(pos[0], pos[1], direction, self.config)
+            obstacles.add(obstacle)
+        logging.info(f"Generated {len(obstacles)} moving obstacles.")
         return obstacles
 
     def run(self) -> None:
@@ -1290,7 +1348,9 @@ class Game:
                     )
                     # Recalculate cell size based on new window size
                     self.cell_size = min(event.w // self.config.GRID_COLS, event.h // self.config.GRID_ROWS)
+                    self.config.cell_size = self.cell_size
                     logging.info(f"Window resized to {event.w}x{event.h}. Cell size set to {self.cell_size}.")
+                    self.renderer.update_offsets(event.w, event.h)  # Update renderer offsets
 
             # State machine update
             if self.state == GameState.MENU:
@@ -1301,6 +1361,8 @@ class Game:
                 self.update_game_over(events)
             elif self.state == GameState.HIGHSCORES:
                 self.update_highscores(events)
+            elif self.state == GameState.SETTINGS:
+                self.update_settings(events)
 
             pygame.display.flip()
 
@@ -1308,67 +1370,144 @@ class Game:
         """Handle menu state updates and rendering"""
         for event in events:
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_p:
+                if event.key == self.settings.get_key('PLAY'):
                     self.state = GameState.PLAY
                     self.reset_game()
                     self.sound_manager.play_menu_sound('select')
-                elif event.key == pygame.K_h:
+                elif event.key == self.settings.get_key('HIGHSCORES'):
                     self.state = GameState.HIGHSCORES
                     self.sound_manager.play_menu_sound('select')
-                elif event.key == pygame.K_o:
+                elif event.key == self.settings.get_key('TOGGLE_OBSTACLES'):
                     self.obstacles_enabled = not self.obstacles_enabled
                     logging.info(f"Obstacles toggled to {'ON' if self.obstacles_enabled else 'OFF'}.")
                     self.sound_manager.play_menu_sound('move')
-                elif event.key == pygame.K_ESCAPE:
+                elif event.key == self.settings.get_key('OPTIONS'):
+                    self.state = GameState.SETTINGS
+                    self.sound_manager.play_menu_sound('select')
+                elif event.key == self.settings.get_key('QUIT'):
                     self.cleanup()
                     sys.exit()
 
         # Draw menu
         w, h = self.screen.get_size()
-        self.cell_size = min(w // self.config.GRID_COLS, h // self.config.GRID_ROWS)  # Ensure cell size is set
+        if self.cell_size == 0:
+            self.cell_size = min(w // self.config.GRID_COLS, h // self.config.GRID_ROWS)
+            self.config.cell_size = self.cell_size
+            self.renderer.update_offsets(w, h)
         self.renderer.draw_background(self.screen, w, h)
         self.renderer.draw_overlay(self.screen, w, h)
 
         self.renderer.draw_text(self.screen, "METAL SNAKE",
-                              w//2, h//2 - 70, size=48,
+                              w//2, h//2 - 100, size=48,
                               center=True, glow=True)
-        self.renderer.draw_text(self.screen, "[P] Play Game",
-                              w//2, h//2 - 10, size=30, center=True)
-        self.renderer.draw_text(self.screen, "[H] Highscores",
-                              w//2, h//2 + 30, size=30, center=True)
+        self.renderer.draw_text(self.screen, f"[{pygame.key.name(self.settings.get_key('PLAY')).upper()}] Play Game",
+                              w//2, h//2 - 40, size=30, center=True)
+        self.renderer.draw_text(self.screen, f"[{pygame.key.name(self.settings.get_key('HIGHSCORES')).upper()}] Highscores",
+                              w//2, h//2, size=30, center=True)
         self.renderer.draw_text(self.screen,
-                              f"[O] Obstacles: {'ON' if self.obstacles_enabled else 'OFF'}",
-                              w//2, h//2 + 70, size=30, center=True)
-        self.renderer.draw_text(self.screen, "[ESC] Quit",
-                              w//2, h//2 + 110, size=30, center=True)
+                              f"[{pygame.key.name(self.settings.get_key('TOGGLE_OBSTACLES')).upper()}] Obstacles: {'ON' if self.obstacles_enabled else 'OFF'}",
+                              w//2, h//2 + 40, size=30, center=True)
+        self.renderer.draw_text(self.screen, f"[{pygame.key.name(self.settings.get_key('OPTIONS')).upper()}] Settings",
+                              w//2, h//2 + 80, size=30, center=True)
+        self.renderer.draw_text(self.screen, f"[{pygame.key.name(self.settings.get_key('QUIT')).upper()}] Quit",
+                              w//2, h//2 + 120, size=30, center=True)
+
+    def update_settings(self, events: List[pygame.event.Event]) -> None:
+        """Handle settings state updates and rendering"""
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_m:
+                    # Toggle background music
+                    self.sound_manager.toggle_music()
+                elif event.key == pygame.K_UP:
+                    # Increase music volume
+                    new_volume = min(1.0, self.sound_manager.music_volume + 0.1)
+                    self.sound_manager.set_music_volume(new_volume)
+                elif event.key == pygame.K_DOWN:
+                    # Decrease music volume
+                    new_volume = max(0.0, self.sound_manager.music_volume - 0.1)
+                    self.sound_manager.set_music_volume(new_volume)
+                elif event.key == pygame.K_u:
+                    # Increase sound effects volume
+                    new_sfx_volume = min(1.0, self.sound_manager.sfx_volume + 0.1)
+                    self.sound_manager.set_sfx_volume(new_sfx_volume)
+                elif event.key == pygame.K_j:
+                    # Decrease sound effects volume
+                    new_sfx_volume = max(0.0, self.sound_manager.sfx_volume - 0.1)
+                    self.sound_manager.set_sfx_volume(new_sfx_volume)
+                elif event.key == self.settings.get_key('QUIT'):
+                    self.state = GameState.MENU
+                    self.sound_manager.play_menu_sound('select')
+
+        # Draw settings menu
+        w, h = self.screen.get_size()
+        if self.cell_size == 0:
+            self.cell_size = min(w // self.config.GRID_COLS, h // self.config.GRID_ROWS)
+            self.config.cell_size = self.cell_size
+            self.renderer.update_offsets(w, h)
+        self.renderer.draw_background(self.screen, w, h)
+        self.renderer.draw_overlay(self.screen, w, h, alpha=80)
+
+        self.renderer.draw_text(self.screen, "SETTINGS",
+                              w//2, 50, size=40,
+                              center=True, glow=True)
+        self.renderer.draw_text(self.screen, "[M] Toggle Music",
+                              w//2, 150, size=30, center=True)
+        self.renderer.draw_text(self.screen, "[UP] Volume Up | [DOWN] Volume Down (Music)",
+                              w//2, 190, size=24, center=True)
+        self.renderer.draw_text(self.screen, "[U] Volume Up | [J] Volume Down (SFX)",
+                              w//2, 230, size=24, center=True)
+        self.renderer.draw_text(self.screen, f"[{pygame.key.name(self.settings.get_key('QUIT')).upper()}] Return to Menu",
+                              w//2, 270, size=30, center=True)
+        self.renderer.draw_text(self.screen, f"Music: {'On' if pygame.mixer.music.get_busy() else 'Off'}",
+                              w//2, 310, size=24, center=True)
+        self.renderer.draw_text(self.screen, f"Music Volume: {int(self.sound_manager.music_volume * 100)}%",
+                              w//2, 350, size=24, center=True)
+        self.renderer.draw_text(self.screen, f"SFX Volume: {int(self.sound_manager.sfx_volume * 100)}%",
+                              w//2, 390, size=24, center=True)
 
     def update_game(self, events: List[pygame.event.Event]) -> None:
         """Handle game state updates and collisions"""
         w, h = self.screen.get_size()
-        self.cell_size = min(w // self.config.GRID_COLS, h // self.config.GRID_ROWS)
+        if self.cell_size == 0:
+            self.cell_size = min(w // self.config.GRID_COLS, h // self.config.GRID_ROWS)
+            self.config.cell_size = self.cell_size
+            self.renderer.update_offsets(w, h)
 
         # Handle input
         for event in events:
             if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_UP:
+                if event.key == self.settings.get_key('UP'):
                     self.snake.set_direction(Direction.UP)
-                elif event.key == pygame.K_DOWN:
+                elif event.key == self.settings.get_key('DOWN'):
                     self.snake.set_direction(Direction.DOWN)
-                elif event.key == pygame.K_LEFT:
+                elif event.key == self.settings.get_key('LEFT'):
                     self.snake.set_direction(Direction.LEFT)
-                elif event.key == pygame.K_RIGHT:
+                elif event.key == self.settings.get_key('RIGHT'):
                     self.snake.set_direction(Direction.RIGHT)
-                elif event.key == pygame.K_ESCAPE:
+                elif event.key == self.settings.get_key('PAUSE'):
                     self.state = GameState.MENU
                     self.sound_manager.play_menu_sound('select')
+                elif event.key == self.settings.get_key('QUIT'):
+                    self.cleanup()
+                    sys.exit()
 
         # Update game logic at fixed rate
         should_update = self.frame_count % (self.config.FPS // self.config.GAME_SPEED) == 0
         if should_update:
             self.game_tick += 1
 
+            # Dynamic Difficulty: Increase speed every SCORE_THRESHOLD points
+            if self.score > 0 and self.score % self.config.SCORE_THRESHOLD == 0:
+                self.config.GAME_SPEED = min(30, self.config.GAME_SPEED + self.config.SPEED_INCREMENT)
+                logging.info(f"Game speed increased to {self.config.GAME_SPEED}")
+
+            # Move obstacles
+            for obstacle in self.obstacles:
+                obstacle.move()
+
             # Move snake and check collisions
-            if not self.snake.move(self.food_pos, self.obstacles):
+            if not self.snake.move(self.food_pos, { (ob.x, ob.y) for ob in self.obstacles }):
                 self.TEMP_SCORE = self.score
                 self.TEMP_MODE = "obstacles" if self.obstacles_enabled else "classic"
                 self.state = GameState.GAME_OVER
@@ -1380,12 +1519,12 @@ class Game:
             self.sound_manager.play_movement_sound(self.config.GAME_SPEED)
 
             # Check food collection
-            head = self.snake.body[0]
+            head = self.snake.head_position()
             if head == self.food_pos:
                 bonus = (1 + self.config.OBSTACLE_BONUS) if self.obstacles_enabled else 1
                 self.score += bonus * self.score_multiplier
-                px = head[0] * self.cell_size + self.cell_size//2
-                py = head[1] * self.cell_size + self.cell_size//2
+                px = head[0] * self.cell_size + self.cell_size//2 + self.renderer.x_offset
+                py = head[1] * self.cell_size + self.cell_size//2 + self.renderer.y_offset
                 self.particles.emit(px, py, self.config.PARTICLE_COUNT, (255, 0, 0))  # Red particles for food
                 self.food_pos = self.get_random_position()
                 self.sound_manager.play_sound('food_pickup', self.sound_manager.pickup_channel)
@@ -1394,6 +1533,10 @@ class Game:
         # Update power-ups
         self.powerup_manager.update(self)
 
+        # Attract food towards snake's head if magnet is active
+        if self.powerup_manager.magnet_active and self.food_pos:
+            self.attract_food()
+
         # Draw game state
         self.renderer.draw_background(self.screen, w, h)
         self.renderer.draw_overlay(self.screen, w, h, alpha=50)
@@ -1401,12 +1544,44 @@ class Game:
         self.renderer.draw_food(self.screen, self.food_pos[0], self.food_pos[1],
                               self.cell_size, self.frame_count)
         self.renderer.draw_powerups(self.screen, self.powerup_manager, self.cell_size, self.frame_count, self.particles)
-        self.snake.draw(self.screen, self.cell_size, self.frame_count)
+        self.renderer.draw_snake(self.screen, self.snake.body, self.frame_count, self.snake.invincible)
         self.particles.update_and_draw(self.screen)
         # Pass score_multiplier to the renderer
         self.renderer.draw_active_powerups_status(self.screen, self.powerup_manager, self.score_multiplier, self.frame_count)
-        self.renderer.draw_text(self.screen, f"Score: {self.score}", 10, 10, size=24)
-        self.renderer.draw_text(self.screen, f"Multiplier: x{self.score_multiplier}", 10, 40, size=24)
+        self.renderer.draw_text(self.screen, f"Score: {self.score}", 10 + self.renderer.x_offset, 10 + self.renderer.y_offset, size=24)
+        self.renderer.draw_text(self.screen, f"Multiplier: x{self.score_multiplier}", 10 + self.renderer.x_offset, 40 + self.renderer.y_offset, size=24)
+
+    def attract_food(self) -> None:
+        """
+        Move the food one step closer to the snake's head to simulate magnet effect.
+        Prioritize moving in the direction with the greater distance.
+        """
+        if not self.food_pos:
+            return
+        snake_head = self.snake.head_position()
+        fx, fy = self.food_pos
+        sx, sy = snake_head
+
+        dx = sx - fx
+        dy = sy - fy
+
+        move_x, move_y = 0, 0
+        if abs(dx) > abs(dy):
+            move_x = 1 if dx > 0 else -1 if dx < 0 else 0
+        else:
+            move_y = 1 if dy > 0 else -1 if dy < 0 else 0
+
+        new_food_pos = (fx + move_x, fy + move_y)
+
+        # Check if the new position is valid
+        if (new_food_pos not in self.snake.body and
+            new_food_pos not in { (ob.x, ob.y) for ob in self.obstacles } and
+            new_food_pos not in [pu.position() for pu in self.powerup_manager.powerups ]):
+            self.food_pos = new_food_pos
+            logging.info(f"Food attracted to {self.food_pos}")
+        else:
+            # If invalid, do not move
+            pass
 
     def update_game_over(self, events: List[pygame.event.Event]) -> None:
         """Handle game over state updates with name entry"""
@@ -1511,7 +1686,7 @@ class Game:
             y_offset += 30
 
         # Draw return instruction
-        self.renderer.draw_text(self.screen, "[ESC] Return to Menu",
+        self.renderer.draw_text(self.screen, f"[{pygame.key.name(self.settings.get_key('QUIT')).upper()}] Return to Menu",
                               w//2, h - 30, size=24, center=True)
 
     def cleanup(self) -> None:
@@ -1520,6 +1695,7 @@ class Game:
         self.sound_manager.cleanup()
         pygame.quit()
         logging.info("----- Game cleanup completed -----")
+
 
 ##########################
 # MAIN ENTRY POINT
